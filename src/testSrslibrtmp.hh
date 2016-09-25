@@ -10,32 +10,9 @@
 //MAX width*height*1.5  .e.g  IDR -> 1280x720x1.5
 #define DUMMY_SINK_RECEIVE_BUFFER_SIZE  (1024*1024+512*1024)
 
-#define CHECK_ALIVE_TASK_TIMER_INTERVAL 30*1000*1000
+#define CHECK_ALIVE_TASK_TIMER_INTERVAL 5*1000*1000
 
 //#define DEBUG
-
-void openURL(UsageEnvironment& env, char const* rtspURL, char const* rtmpURL);
-
-void continueAfterDESCRIBE(RTSPClient* rtspClient, int resultCode, char* resultString);
-void continueAfterSETUP(RTSPClient* rtspClient, int resultCode, char* resultString);
-void continueAfterPLAY(RTSPClient* rtspClient, int resultCode, char* resultString);
-void setupNextSubsession(RTSPClient* rtspClient);
-void shutdownStream(RTSPClient* rtspClient, int exitCode = 1);
-
-void subsessionAfterPlaying(void* clientData);
-void subsessionByeHandler(void* clientData);
-void streamTimerHandler(void* clientData);
-void sendLivenessCommandHandler(void* clientData);
-
-void usage(UsageEnvironment& env);
-void announceStream(RTSPClient* rtspClient);
-
-Boolean isSPS(u_int8_t nut)  { return nut == 7; } //Sequence parameter set
-Boolean isPPS(u_int8_t nut)  { return nut == 8; } //Picture parameter set
-Boolean isIDR(u_int8_t nut)  { return nut == 5; } //Coded slice of an IDR picture
-Boolean isNonIDR(u_int8_t nut)  { return nut == 1; } //Coded slice of a non-IDR picture
-//Boolean isSEI(u_int8_t nut) const { return nut == 6; } //Supplemental enhancement information
-//Boolean isAUD(u_int8_t nut) const { return nut == 9; } //Access unit delimiter
 
 class StreamClientState {
 public:
@@ -48,25 +25,20 @@ public:
 	TaskToken streamTimerTask;
 	TaskToken checkAliveTimerTask;
 	double duration;
+	char const* rtmpUrl;
+	Boolean rtspUseTcp;
+	struct timeval lastGettingFrameTime;
 };
 
 class ourRTSPClient: public RTSPClient {
 public:
-	static ourRTSPClient* createNew(UsageEnvironment& env, char const* rtspURL,
-					char const* rtmpURL, int verbosityLevel = 0, char const* applicationName = NULL,
-					portNumBits tunnelOverHTTPPortNum = 0);
+	static ourRTSPClient* createNew(UsageEnvironment& env, char const* rtspURL, char const* rtmpURL, Boolean rtspUseTcp);
 protected:
-	ourRTSPClient(UsageEnvironment& env, char const* rtspURL, char const* rtmpURL,
-					int verbosityLevel, char const* applicationName,
-					portNumBits tunnelOverHTTPPortNum);
-
+	ourRTSPClient(UsageEnvironment& env, char const* rtspURL, char const* rtmpURL, Boolean rtspUseTcp);
 	virtual ~ourRTSPClient();
 public:
 	StreamClientState scs;
-	void* publisher;        //ourRTMPClient
-	char const* endpoint() const { return fDestUrl; }       //rtmpURL
-private:
-    char* fDestUrl;
+	void* publisher;  //ourRTMPClient
 };
 
 class ourRTMPClient: public Medium {
@@ -75,13 +47,12 @@ public:
 protected:
 	ourRTMPClient(UsageEnvironment& env, RTSPClient* rtspClient);
 	virtual ~ourRTMPClient();
-public:
-	Boolean sendH264FramePacket(u_int8_t* data, unsigned size, unsigned timestamp);
-private:
 	Boolean connect();
+public:
+	Boolean sendH264FramePacket(u_int8_t* data, unsigned size, long timestamp);
 private:
 	srs_rtmp_t rtmp;
-	unsigned fTimestamp;
+	long fTimestamp;
 	u_int32_t dts, pts;
 	ourRTSPClient* fSource;
 };
@@ -103,7 +74,7 @@ protected:
 	// redefined virtual functions:
 	virtual Boolean continuePlaying();
 public:
-	Boolean sendSpsPacket(u_int8_t* data, unsigned size, unsigned timestamp = 0) {
+	Boolean sendSpsPacket(u_int8_t* data, unsigned size, long timestamp = 0L) {
 		if (fSps != NULL) { delete[] fSps; fSps = NULL; }
 		fSpsSize = size+4;
 		fSps = new u_int8_t[fSpsSize];
@@ -112,13 +83,16 @@ public:
 		fSps[2] = 0;    fSps[3] = 1;
 		memmove(fSps+4, data, size);
 
+
 		if(timestamp == 0)
 			return True;
-		else
-			return  rtmpClient->sendH264FramePacket(fSps, fSpsSize, timestamp);
+		else {
+			ourRTSPClient* rtspClient = (ourRTSPClient*)fSubsession.miscPtr;
+			return ((ourRTMPClient*)rtspClient->publisher)->sendH264FramePacket(fSps, fSpsSize, timestamp);
+		}
 	}
 
-	Boolean sendPpsPacket(u_int8_t* data, unsigned size, unsigned timestamp = 0) {
+	Boolean sendPpsPacket(u_int8_t* data, unsigned size, long timestamp = 0L) {
 		if (fPps != NULL) { delete[] fPps; fPps = NULL; }
 		fPpsSize = size+4;
 		fPps = new u_int8_t[fPpsSize];
@@ -129,8 +103,10 @@ public:
 
 		if(timestamp == 0)
 			return True;
-		else
-			return  rtmpClient->sendH264FramePacket(fPps, fPpsSize, timestamp);
+		else {
+			ourRTSPClient* rtspClient = (ourRTSPClient*)fSubsession.miscPtr;
+			return  ((ourRTMPClient*)rtspClient->publisher)->sendH264FramePacket(fPps, fPpsSize, timestamp);
+		}
 	}
 private:
 	u_int8_t* fSps;
@@ -141,15 +117,6 @@ private:
 	char* fStreamId;
 	MediaSubsession& fSubsession;
 	Boolean fHaveWrittenFirstFrame;
-	ourRTMPClient* rtmpClient ;
 };
-
-UsageEnvironment& operator << (UsageEnvironment& env, const RTSPClient& rtspClient) {
-    return env << "[URL:\"" << rtspClient.url() << "\"]: ";
-}
-
-UsageEnvironment& operator<< (UsageEnvironment& env, const MediaSubsession& subsession) {
-    return env << subsession.mediumName() << "/" << subsession.codecName();
-}
 
 #endif /* __TEST_SRS_LIBRTMP_HH_ */
