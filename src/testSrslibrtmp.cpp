@@ -476,7 +476,7 @@ Boolean DummySink::continuePlaying() {
 }
 
 //Implementation of "ourRTMPClient":
-ourRTMPClient* ourRTMPClient::createNew(UsageEnvironment& env, RTSPClient* rtspClient) {
+ourRTMPClient*  ourRTMPClient::createNew(UsageEnvironment& env, RTSPClient* rtspClient) {
 	return new ourRTMPClient(env, rtspClient);
 }
 
@@ -486,13 +486,14 @@ ourRTMPClient::ourRTMPClient(UsageEnvironment& env, RTSPClient* rtspClient)
 	do {
 		rtmp = srs_rtmp_create(fSource->scs.rtmpUrl);
 		if (srs_rtmp_handshake(rtmp) != 0) {
+#ifdef DEBUG
 			envir() << *fSource << "simple handshake failed." << "\n";
+#endif
 			break;
 		}
 #ifdef DEBUG
 		envir() << *fSource <<"simple handshake success" << "\n";
 #endif
-
 		if (srs_rtmp_connect_app(rtmp) != 0) {
 			envir() << *fSource << "connect vhost/app failed." << "\n";
 			break;
@@ -523,8 +524,6 @@ ourRTMPClient::~ourRTMPClient() {
 #endif
 	srs_rtmp_destroy(rtmp);
 	fSource->publisher = NULL;
-
-	usleep(5 * 1000 * 1000);
 }
 
 Boolean ourRTMPClient::sendH264FramePacket(u_int8_t* data, unsigned size, long timestamp) {

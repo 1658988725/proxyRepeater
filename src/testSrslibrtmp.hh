@@ -47,7 +47,6 @@ public:
 protected:
 	ourRTMPClient(UsageEnvironment& env, RTSPClient* rtspClient);
 	virtual ~ourRTMPClient();
-	Boolean connect();
 public:
 	Boolean sendH264FramePacket(u_int8_t* data, unsigned size, long timestamp);
 private:
