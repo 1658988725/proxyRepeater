@@ -523,6 +523,7 @@ ourRTMPClient::~ourRTMPClient() {
 #endif
 	srs_rtmp_destroy(rtmp);
 	fSource->publisher = NULL;
+
 	usleep(5 * 1000 * 1000);
 }
 
@@ -601,6 +602,7 @@ void continueAfterDESCRIBE(RTSPClient* rtspClient, int resultCode, char* resultS
 
 	// An unrecoverable error occurred with this stream.
 	if (nextStepFlag == 0) {
+		usleep(5 * 1000 * 1000);
 		shutdownStream(rtspClient);
 	}
 }
