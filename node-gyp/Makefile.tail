@@ -22,7 +22,7 @@ ifneq ($(strip $(CROSS_COMPILE)),)
 endif
 	@echo \"targets\": [{ \
 	      \"target_name\" : \"node_nvr_addon\", \
-	      \"sources\" : [ \"../src/testSrslibrtmp.cpp\" , \"../src/cJSON.c\"], \
+	      \"sources\" : [ \"../src/rtmpPusher.cpp\" , \"../src/cJSON.c\"], \
 	      \"defines\" : [ \
 	          \"NODE_V8_ADDON\", \
 	          \"SOCKLEN_T=socklen_t\", \
@@ -57,7 +57,13 @@ create_package_json:
 	@echo \"description\": \"node_nvr_addon\", >> package.json
 	@echo \"main\": \"app.js\", >> package.json
 	@echo \"scripts\": {  >> package.json
+ifeq ($(GYP_TARGET_ARCH),raspberry)
+	@echo \"install\": \"node-gyp rebuild --target-arch=arm\",  >> package.json
+else ifeq ($(GYP_TARGET_ARCH),mipsel)
+	@echo \"install\": \"node-gyp rebuild --target-arch=arm\",  >> package.json
+else
 	@echo \"install\": \"node-gyp rebuild --target-arch=$(GYP_TARGET_ARCH)\",  >> package.json
+endif
 	@echo \"test\": \"node -e \\\"require\(\'./build/Release/node_nvr_addon.node\'\)\\\"\" >> package.json
 	@echo },  >> package.json
 	@echo \"repository\": { >> package.json

@@ -27,5 +27,5 @@ AR = $(CROSS_COMPILE)ar
 LINK = $(CROSS_COMPILE)g++
 CXXFLAGS = -ansi -Wall -g -O0 -fPIC
       
-GYP_TARGET_ARCH = arm
+GYP_TARGET_ARCH = raspberry
 
