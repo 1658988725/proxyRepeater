@@ -9,7 +9,7 @@ SRS_LIB = $(SRS)/lib/srs_librtmp.a
 
 LIBS = cJSON.$(OBJ) $(LIVE555_LIB) $(SRS_LIB) 
 
-PROGS = testSrslibrtmp
+PROGS = rtmpPusher
 
 .PHONY : all clean
 
@@ -20,9 +20,9 @@ all: $(PROGS)
 .$(CPP).$(OBJ) :
 	$(CPLUSPLUS_COMPILER) -c $(LIVE555_INC) $(SRS_INC) $(CPLUSPLUS_FLAGS) $<
 	
-testSrslibrtmp : testSrslibrtmp.$(OBJ) $(LIBS)
-	$(CPLUSPLUS_COMPILER) $(COMPILE_OPTS) -o ../objs/$@ $< $(LIBS)
-	@$(STRIP) ../objs/$@
+rtmpPusher : rtmpPusher.$(OBJ) $(LIBS)
+	$(CPLUSPLUS_COMPILER) $(COMPILE_OPTS) -o ../objs/$@-$(GYP_TARGET_ARCH) $< $(LIBS)
+	@$(STRIP) ../objs/$@-$(GYP_TARGET_ARCH)
 	
 clean :
-	-rm -rf *.$(OBJ) ../objs/$(PROGS) core *.core *~ include/*~
+	-rm -rf *.$(OBJ) core *.core *~ include/*~
