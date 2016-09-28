@@ -2,6 +2,7 @@
 
 #include <vector>
 #include <pthread.h>
+#include <stdio.h>
 
 #ifdef NODE_V8_ADDON
 #include <node.h>
@@ -66,9 +67,10 @@ typedef struct {
 } ConnParams;
 
 typedef std::vector<ConnParams>  CP_ARRAY;
-CP_ARRAY channels;
+static CP_ARRAY channels;
 
 int parseConfData(cJSON* conf) {
+	ConnParams params;
 	struct timeval timeNow;
 	gettimeofday(&timeNow, NULL);
 	long nonce = timeNow.tv_sec * 1000 + timeNow.tv_usec / 1000;
@@ -80,7 +82,6 @@ int parseConfData(cJSON* conf) {
 		if (NULL == pItem)
 			continue;
 
-		ConnParams params;
 		cJSON* rtspUrl = cJSON_GetObjectItem(pItem, "rtspUrl");
 		cJSON* rtspUsername = cJSON_GetObjectItem(pItem, "rtspUsername");
 		cJSON* rtspPassword = cJSON_GetObjectItem(pItem, "rtspPassword");
@@ -88,10 +89,13 @@ int parseConfData(cJSON* conf) {
 		cJSON* endpoint = cJSON_GetObjectItem(pItem, "endpoint");
 		cJSON* stream = cJSON_GetObjectItem(pItem, "stream");
 		cJSON* password = cJSON_GetObjectItem(pItem, "password");
+
 		if (NULL != rtspUrl && NULL != endpoint) {
 			params.rtspURL = strDup(rtspUrl->valuestring);
+
+			params.rtspAUTH = new Authenticator();
 			if (rtspUsername != NULL && rtspPassword != NULL) {
-				params.rtspAUTH = new Authenticator(rtspUsername->valuestring, rtspPassword->valuestring, False);
+				params.rtspAUTH->setUsernameAndPassword(strDup(rtspUsername->valuestring), strDup(rtspPassword->valuestring));
 			}
 			params.rtspUseTcp = (rtspUseTcp != NULL) ? rtspUseTcp->valueint == 1 : False;
 
@@ -140,6 +144,7 @@ void *openURL(void *args) {
 		*thatEnv << "ERROR: Failed to create a RTSP client for URL \"" << channels[id].rtspURL << "\": " << thatEnv->getResultMsg() << "\n";
 		pthread_exit(0);
 	}
+
 	rtspClient->sendDescribeCommand(continueAfterDESCRIBE, channels[id].rtspAUTH);
 	return (void *) 0;
 }
@@ -180,8 +185,7 @@ int main(int argc, char** argv) {
 					pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED);
 					pthread_create(&cthread, NULL, openURL, (void*)(&ch));
 
-					//pthread_join(cthread, &cthread_return)
-					if (pthread_join(cthread, NULL) != 0)
+					if (pthread_join(cthread, NULL) != 0) //pthread_join(cthread, &cthread_return)
 						continue;
 				}
 				cJSON_Delete(conf);
