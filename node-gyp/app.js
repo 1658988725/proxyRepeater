@@ -10,7 +10,6 @@ var data = [{
 	rtspPassword: "888888",
 	rtspUseTcp: 0,
     endpoint: "rtmp://127.0.0.1:1935/srs",
-    stream: "stream1",
     password: "publish2016"
 }];
 
