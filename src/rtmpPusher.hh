@@ -4,6 +4,7 @@
 
 #include "liveMedia.hh"
 #include "BasicUsageEnvironment.hh"
+#include "GroupsockHelper.hh"
 #include "srs_librtmp.h"
 
 #define RTSP_CLIENT_VERBOSITY_LEVEL 0
@@ -14,8 +15,6 @@
 #define CHECK_ALIVE_TASK_TIMER_INTERVAL 5*1000*1000
 
 #define RECONNECT_WAIT_DELAY(n) if (n >= 3) { usleep(CHECK_ALIVE_TASK_TIMER_INTERVAL); n = 0; }
-
-//#define DEBUG
 
 class StreamClientState {
 public:
@@ -39,10 +38,10 @@ protected:
 	ourRTMPClient(UsageEnvironment& env, RTSPClient* rtspClient);
 	virtual ~ourRTMPClient();
 public:
-	Boolean sendH264FramePacket(u_int8_t* data, unsigned size, long timestamp);
+	Boolean sendH264FramePacket(u_int8_t* data, unsigned size, u_int32_t currTimestamp);
 private:
 	srs_rtmp_t rtmp;
-	long fTimestamp;
+	u_int32_t priorTimestamp;
 	u_int32_t dts, pts;
 	RTSPClient* fSource;
 };
@@ -80,7 +79,7 @@ protected:
 	// redefined virtual functions:
 	virtual Boolean continuePlaying();
 public:
-	Boolean sendSpsPacket(u_int8_t* data, unsigned size, long timestamp = 0L) {
+	Boolean sendSpsPacket(u_int8_t* data, unsigned size, u_int32_t timestamp = 0) {
 		if (fSps != NULL) {
 			delete[] fSps; fSps = NULL;
 		}
@@ -99,7 +98,7 @@ public:
 		}
 	}
 
-	Boolean sendPpsPacket(u_int8_t* data, unsigned size, long timestamp = 0L) {
+	Boolean sendPpsPacket(u_int8_t* data, unsigned size, u_int32_t timestamp = 0) {
 		if (fPps != NULL) {
 			delete[] fPps; fPps = NULL;
 		}

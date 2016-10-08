@@ -1,8 +1,6 @@
 
-
 #include <vector>
 #include <pthread.h>
-#include <stdio.h>
 
 #ifdef NODE_V8_ADDON
 #include <node.h>
@@ -71,9 +69,6 @@ static CP_ARRAY channels;
 
 int parseConfData(cJSON* conf) {
 	ConnParams params;
-	struct timeval timeNow;
-	gettimeofday(&timeNow, NULL);
-	long nonce = timeNow.tv_sec * 1000 + timeNow.tv_usec / 1000;
 	char const* expire = "-1";
 
 	int iCount = cJSON_GetArraySize(conf);
@@ -103,7 +98,7 @@ int parseConfData(cJSON* conf) {
 			//rtmp://host:port/app[?nonce=x&token=y]/stream
 			sprintf(rtmpUrl, "%s", endpoint->valuestring);
 			if (NULL != password && strlen(password->valuestring) > 0) {
-				nonce += 500;
+				long nonce = our_random();
 				char token[50] = { '\0' }, md5[33] = { '\0' };
 				sprintf(token, "%ld%s%s", nonce, password->valuestring, expire);
 				our_MD5Data((unsigned char*) token, strlen(token), md5);
@@ -155,12 +150,12 @@ int main(int argc, char** argv) {
 	TaskScheduler* scheduler = BasicTaskScheduler::createNew();
 	thatEnv = BasicUsageEnvironment::createNew(*scheduler);
 
+	progName = argv[0];
+
 	if (argc < 2) {
 		usage(*thatEnv);
 		exit(0);
 	}
-
-	progName = argv[0];
 
 	int opt;
 	cJSON* conf;
@@ -372,7 +367,7 @@ ourRTMPClient* ourRTMPClient::createNew(UsageEnvironment& env, RTSPClient* rtspC
 }
 
 ourRTMPClient::ourRTMPClient(UsageEnvironment& env, RTSPClient* rtspClient)
-	: Medium(env), rtmp(NULL), fTimestamp(0), dts(0), pts(0), fSource(rtspClient) {
+	: Medium(env), rtmp(NULL), priorTimestamp(0), dts(0), pts(0), fSource(rtspClient) {
 	unsigned id = ((ourRTSPClient*)fSource)->id();
 	do {
 		rtmp = srs_rtmp_create(channels[id].rtmpURL);
@@ -421,14 +416,15 @@ ourRTMPClient::~ourRTMPClient() {
 	RECONNECT_WAIT_DELAY(rtmpReconnectCount);
 }
 
-Boolean ourRTMPClient::sendH264FramePacket(u_int8_t* data, unsigned size, long timestamp) {
+Boolean ourRTMPClient::sendH264FramePacket(u_int8_t* data, unsigned size, u_int32_t currTimestamp) {
 	do {
-		if (NULL != data && size > 0) {
-			if (fTimestamp == 0)
-				fTimestamp = timestamp;
+		if (priorTimestamp == 0)
+			priorTimestamp = currTimestamp;
 
-			pts = dts += (timestamp - fTimestamp);
-			fTimestamp = timestamp;
+		if (NULL != data && size >= 4) {
+			pts = dts += (currTimestamp - priorTimestamp);
+			priorTimestamp = currTimestamp;
+
 			int ret = srs_h264_write_raw_frames(rtmp, (char*) data, size, dts, pts);
 			if (ret != 0) {
 				if (srs_h264_is_dvbsp_error(ret)) {
@@ -513,10 +509,11 @@ void DummySink::afterGettingFrame(unsigned frameSize, unsigned numTruncatedBytes
 		unsigned /*durationInMicroseconds*/) {
 	ourRTSPClient* rtspClient = (ourRTSPClient*)fSubsession.miscPtr;
 	StreamClientState& scs = rtspClient->scs;
-	u_int8_t nal_unit_type = fReceiveBuffer[4] & 0x1F; //0xFF;
 
+	u_int8_t nal_unit_type = fReceiveBuffer[4] & 0x1F; //0xFF;
 	gettimeofday(&scs.lastGettingFrameTime, NULL);
-	long timestamp = scs.lastGettingFrameTime.tv_sec * 1000 + scs.lastGettingFrameTime.tv_usec / 1000;
+
+	u_int32_t timestamp = scs.lastGettingFrameTime.tv_sec * 1000 + scs.lastGettingFrameTime.tv_usec / 1000;
 
 	if (rtspClient->publisher == NULL)
 		goto RECONNECT;
@@ -566,17 +563,6 @@ Boolean DummySink::continuePlaying() {
 	return True;
 }
 
-/*
-void openURL(UsageEnvironment& env, int id) {
-	ourRTSPClient* rtspClient = ourRTSPClient::createNew(env, id);
-	if (rtspClient == NULL) {
-		env << "ERROR: Failed to create a RTSP client for URL \"" << channels[id].rtspURL << "\": " << env.getResultMsg() << "\n";
-		return;
-	}
-	rtspClient->sendDescribeCommand(continueAfterDESCRIBE, channels[id].rtspAUTH);
-}
-*/
-
 void continueAfterDESCRIBE(RTSPClient* rtspClient, int resultCode, char* resultString) {
 	int nextStepFlag = 0;
 	do {
@@ -585,11 +571,13 @@ void continueAfterDESCRIBE(RTSPClient* rtspClient, int resultCode, char* resultS
 
 		if (resultCode != 0) {
 			env << *rtspClient << "Failed to get a SDP description: " << resultString << "\n";
+			delete[] resultString; resultString = NULL;
 			break;
 		}
 
 		if (strstr(resultString, "m=video") == NULL) {
 			env << *rtspClient << "Not found video by SDP description (i.e., no \"m=video\" lines)\n";
+			delete[] resultString; resultString = NULL;
 			break;
 		}
 
@@ -599,8 +587,7 @@ void continueAfterDESCRIBE(RTSPClient* rtspClient, int resultCode, char* resultS
 #endif
 		// Create a media session object from this SDP description:
 		scs.session = MediaSession::createNew(env, sdpDescription);
-		delete[] sdpDescription;
-		sdpDescription = NULL;
+		delete[] sdpDescription; sdpDescription = NULL;
 
 		if (scs.session == NULL) {
 			env << *rtspClient << "Failed to create a MediaSession object from the SDP description: " << env.getResultMsg() << "\n";

@@ -1,0 +1,10 @@
+#!/bin/sh
+
+PROC='./rtmpPusher-mipsel'
+
+while [ 1 ]; do
+   if [ `ps | grep $PROC | grep -v grep | wc -l` -eq 0 ]; then
+      $PROC -c srs.conf
+   fi
+   sleep 10
+done
