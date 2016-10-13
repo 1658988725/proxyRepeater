@@ -175,7 +175,7 @@ int main(int argc, char** argv) {
       if (sscanf(argv[2], "%d", &portArg) != 1) {
 	usage();
       }
-      if (portArg <= 0 || portArg >= 65536 || portArg&1) {
+      if (portArg <= 0 || portArg >= 65536 || (portArg&1)) {
 	*env << "bad port number: " << portArg
 		<< " (must be even, and in the range (0,65536))\n";
 	usage();

@@ -146,7 +146,7 @@ void BasicTaskScheduler0::triggerEvent(EventTriggerId eventTriggerId, void* clie
 ////////// HandlerSet (etc.) implementation //////////
 
 HandlerDescriptor::HandlerDescriptor(HandlerDescriptor* nextHandler)
-  : conditionSet(0), handlerProc(NULL) {
+  : socketNum(0), conditionSet(0), handlerProc(NULL), clientData(NULL) {
   // Link this descriptor into a doubly-linked list:
   if (nextHandler == this) { // initialization
     fNextHandler = fPrevHandler = this;
