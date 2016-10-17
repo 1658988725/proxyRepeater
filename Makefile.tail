@@ -1,9 +1,9 @@
 ##### End of variables to change
-
-LIVEMEDIA_DIR = live555/liveMedia
-GROUPSOCK_DIR = live555/groupsock
-USAGE_ENVIRONMENT_DIR = live555/UsageEnvironment
-BASIC_USAGE_ENVIRONMENT_DIR = live555/BasicUsageEnvironment
+LIVE555_DIR = live555
+LIVEMEDIA_DIR = $(LIVE555_DIR)/liveMedia
+GROUPSOCK_DIR = $(LIVE555_DIR)/groupsock
+USAGE_ENVIRONMENT_DIR = $(LIVE555_DIR)/UsageEnvironment
+BASIC_USAGE_ENVIRONMENT_DIR = $(LIVE555_DIR)/BasicUsageEnvironment
 SRS_LIBRTMP_DIR = srs-librtmp
 
 .PHONY : all node clean
@@ -20,12 +20,8 @@ node: all
 	cd node-gyp; $(MAKE)
 	
 distclean: clean
-	-rm -f $(LIVEMEDIA_DIR)/Makefile \
-	  $(GROUPSOCK_DIR)/Makefile \
-	  $(USAGE_ENVIRONMENT_DIR)/Makefile \
-	  $(BASIC_USAGE_ENVIRONMENT_DIR)/Makefile \
-	  $(SRS_LIBRTMP_DIR)/Makefile \
-	  $(SRS_LIBRTMP_DIR)/objs/Makefile \
+	-rm -rf $(LIVE555_DIR) \
+	  $(SRS_LIBRTMP_DIR) \
 	  src/Makefile \
 	  node-gyp/Makefile \
 	  Makefile

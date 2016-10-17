@@ -13,21 +13,17 @@
 #include "rtmpPusher.hh"
 #include "cJSON.h"
 #include "ourMD5.hh"
+#include "BitVector.hh"
 
 using namespace std;
 
 UsageEnvironment* thatEnv;
 char eventLoopWatchVariable = 0;
 Boolean runDaemonMode = False;
-unsigned rtspReconnectCount = 0, rtmpReconnectCount = 0;
+static unsigned rtspReconnectCount = 0, rtmpReconnectCount = 0;
 char const* progName = NULL;
 
-Boolean isSPS(u_int8_t nut) { return nut == 7; } //Sequence parameter set
-Boolean isPPS(u_int8_t nut) { return nut == 8; } //Picture parameter set
-Boolean isIDR(u_int8_t nut) { return nut == 5; } //Coded slice of an IDR picture
-Boolean isNonIDR(u_int8_t nut) { return nut == 1; } //Coded slice of a non-IDR picture
-//Boolean isSEI(u_int8_t nut) { return nut == 6; } //Supplemental enhancement information
-//Boolean isAUD(u_int8_t nut) { return nut == 9; } //Access unit delimiter
+//#define DEBUG
 
 UsageEnvironment& operator << (UsageEnvironment& env, const RTSPClient& rtspClient) {
     return env << "[URL:\"" << rtspClient.url() << "\"]: ";
@@ -86,22 +82,21 @@ int parseConfData(cJSON* conf) {
 
 		if (NULL != rtspUrl && NULL != endpoint) {
 			params.rtspURL = strDup(rtspUrl->valuestring);
-
 			params.rtspAUTH = new Authenticator();
 			if (rtspUsername != NULL && rtspPassword != NULL) {
 				params.rtspAUTH->setUsernameAndPassword(strDup(rtspUsername->valuestring), strDup(rtspPassword->valuestring));
 			}
 			params.rtspUseTcp = (rtspUseTcp != NULL) ? rtspUseTcp->valueint == 1 : False;
 
-			char rtmpUrl[120] = { '\0' };
+			char rtmpUrl[120] = {'\0'};
 			//rtmp://host:port/app[?nonce=x&token=y]/stream
 			sprintf(rtmpUrl, "%s", endpoint->valuestring);
 			if (NULL != password && strlen(password->valuestring) > 0) {
 				long nonce = our_random();
-				char token[50] = { '\0' }, md5[33] = { '\0' };
+				char token[50] = {'\0'}, md5[33] = {'\0'};
 				sprintf(token, "%ld%s%s", nonce, password->valuestring, expire);
-				our_MD5Data((unsigned char*) token, strlen(token), md5);
-				sprintf(rtmpUrl, "%s?nonce=%ld&token=%s", rtmpUrl, nonce, md5);
+				our_MD5Data((unsigned char*)token, strlen(token), md5);
+				sprintf(rtmpUrl, "%s?token=%s%ld", rtmpUrl, md5, nonce);
 			}
 
 			if (stream != NULL)
@@ -110,11 +105,205 @@ int parseConfData(cJSON* conf) {
 				sprintf(rtmpUrl, "%s/ch%d", rtmpUrl, i);
 
 			params.rtmpURL = strDup(rtmpUrl);
-
 			channels.push_back(params);
 		}
 	}
 	return iCount;
+}
+
+int h264_decode_sps(BYTE * buf, unsigned int nLen, unsigned &width, unsigned &height, unsigned &fps) {
+	UINT StartBit = 0;
+	fps = 0;
+	de_emulation_prevention(buf, &nLen);
+
+	int forbidden_zero_bit;
+	int nal_ref_idc;
+	int nal_unit_type;
+	int profile_idc;
+	int constraint_set0_flag;
+	int constraint_set1_flag;
+	int constraint_set2_flag;
+	int constraint_set3_flag;
+	int reserved_zero_4bits;
+	int level_idc;
+	int seq_parameter_set_id;
+	int chroma_format_idc = 0;
+	int residual_colour_transform_flag;
+	int bit_depth_luma_minus8;
+	int bit_depth_chroma_minus8;
+	int qpprime_y_zero_transform_bypass_flag;
+	int seq_scaling_matrix_present_flag;
+	int seq_scaling_list_present_flag[8];
+	int log2_max_frame_num_minus4;
+	int pic_order_cnt_type;
+	int log2_max_pic_order_cnt_lsb_minus4;
+	int delta_pic_order_always_zero_flag;
+	int offset_for_non_ref_pic;
+	int offset_for_top_to_bottom_field;
+	int num_ref_frames_in_pic_order_cnt_cycle;
+	int num_ref_frames;
+	int gaps_in_frame_num_value_allowed_flag;
+	int pic_width_in_mbs_minus1;
+	int pic_height_in_map_units_minus1;
+	int frame_mbs_only_flag;
+	int mb_adaptive_frame_field_flag;
+	int direct_8x8_inference_flag;
+	int frame_cropping_flag;
+	int frame_crop_left_offset;
+	int frame_crop_right_offset;
+	int frame_crop_top_offset;
+	int frame_crop_bottom_offset;
+	int vui_parameter_present_flag;
+	int aspect_ratio_info_present_flag;
+	int aspect_ratio_idc;
+	int sar_width;
+	int sar_height;
+	int overscan_info_present_flag;
+	int overscan_appropriate_flagu;
+	int video_signal_type_present_flag;
+	int video_format;
+	int video_full_range_flag;
+	int colour_description_present_flag;
+	int colour_primaries;
+	int transfer_characteristics;
+	int matrix_coefficients;
+	int chroma_loc_info_present_flag;
+	int chroma_sample_loc_type_top_field;
+	int chroma_sample_loc_type_bottom_field;
+	int timing_info_present_flag;
+	int num_units_in_tick;
+	int time_scale;
+
+	forbidden_zero_bit = u(1, buf, StartBit);
+	nal_ref_idc = u(2, buf, StartBit);
+	nal_unit_type = u(5, buf, StartBit);
+	if (nal_unit_type == 7) {
+		profile_idc = u(8, buf, StartBit);
+		constraint_set0_flag = u(1, buf, StartBit); //(buf[1] & 0x80)>>7;
+		constraint_set1_flag = u(1, buf, StartBit); //(buf[1] & 0x40)>>6;
+		constraint_set2_flag = u(1, buf, StartBit); //(buf[1] & 0x20)>>5;
+		constraint_set3_flag = u(1, buf, StartBit); //(buf[1] & 0x10)>>4;
+		reserved_zero_4bits = u(4, buf, StartBit);
+		level_idc = u(8, buf, StartBit);
+
+		seq_parameter_set_id = Ue(buf, nLen, StartBit);
+
+		if (profile_idc == 100 || profile_idc == 110 || profile_idc == 122
+				|| profile_idc == 144) {
+			chroma_format_idc = Ue(buf, nLen, StartBit);
+			if (chroma_format_idc == 3)
+				residual_colour_transform_flag = u(1, buf, StartBit);
+			bit_depth_luma_minus8 = Ue(buf, nLen, StartBit);
+			bit_depth_chroma_minus8 = Ue(buf, nLen, StartBit);
+			qpprime_y_zero_transform_bypass_flag = u(1, buf, StartBit);
+			seq_scaling_matrix_present_flag = u(1, buf, StartBit);
+
+			if (seq_scaling_matrix_present_flag) {
+				for (int i = 0; i < 8; i++) {
+					seq_scaling_list_present_flag[i] = u(1, buf, StartBit);
+				}
+			}
+		}
+		log2_max_frame_num_minus4 = Ue(buf, nLen, StartBit);
+		pic_order_cnt_type = Ue(buf, nLen, StartBit);
+		if (pic_order_cnt_type == 0)
+			log2_max_pic_order_cnt_lsb_minus4 = Ue(buf, nLen, StartBit);
+		else if (pic_order_cnt_type == 1) {
+			delta_pic_order_always_zero_flag = u(1, buf, StartBit);
+			offset_for_non_ref_pic = Se(buf, nLen, StartBit);
+			offset_for_top_to_bottom_field = Se(buf, nLen, StartBit);
+			num_ref_frames_in_pic_order_cnt_cycle = Ue(buf, nLen, StartBit);
+
+			int *offset_for_ref_frame = new int[num_ref_frames_in_pic_order_cnt_cycle];
+			for (int i = 0; i < num_ref_frames_in_pic_order_cnt_cycle; i++)
+				offset_for_ref_frame[i] = Se(buf, nLen, StartBit);
+			delete[] offset_for_ref_frame;
+		}
+		num_ref_frames = Ue(buf, nLen, StartBit);
+		gaps_in_frame_num_value_allowed_flag = u(1, buf, StartBit);
+		pic_width_in_mbs_minus1 = Ue(buf, nLen, StartBit);
+		pic_height_in_map_units_minus1 = Ue(buf, nLen, StartBit);
+
+		frame_mbs_only_flag = u(1, buf, StartBit);
+		if (!frame_mbs_only_flag)
+			mb_adaptive_frame_field_flag = u(1, buf, StartBit);
+
+		direct_8x8_inference_flag = u(1, buf, StartBit);
+		frame_cropping_flag = u(1, buf, StartBit);
+		if (frame_cropping_flag) {
+			frame_crop_left_offset = Ue(buf, nLen, StartBit);
+			frame_crop_right_offset = Ue(buf, nLen, StartBit);
+			frame_crop_top_offset = Ue(buf, nLen, StartBit);
+			frame_crop_bottom_offset = Ue(buf, nLen, StartBit);
+		}
+
+		width = (pic_width_in_mbs_minus1 + 1) * 16;
+		height = (2 - frame_mbs_only_flag) * (pic_height_in_map_units_minus1 + 1) * 16;
+
+		if (frame_cropping_flag) {
+			unsigned int crop_unit_x;
+			unsigned int crop_unit_y;
+			if (0 == chroma_format_idc) {
+				// monochrome
+				crop_unit_x = 1;
+				crop_unit_y = 2 - frame_mbs_only_flag;
+			} else if (1 == chroma_format_idc) {
+				// 4:2:0
+				crop_unit_x = 2;
+				crop_unit_y = 2 * (2 - frame_mbs_only_flag);
+			} else if (2 == chroma_format_idc) {
+				// 4:2:2
+				crop_unit_x = 2;
+				crop_unit_y = 2 - frame_mbs_only_flag;
+			} else {
+				// 3 == chroma_format_idc   // 4:4:4
+				crop_unit_x = 1;
+				crop_unit_y = 2 - frame_mbs_only_flag;
+			}
+
+			width -= crop_unit_x * (frame_crop_left_offset + frame_crop_right_offset);
+			height -= crop_unit_y * (frame_crop_top_offset + frame_crop_bottom_offset);
+		}
+
+		vui_parameter_present_flag = u(1, buf, StartBit);
+		if (vui_parameter_present_flag) {
+			aspect_ratio_info_present_flag = u(1, buf, StartBit);
+			if (aspect_ratio_info_present_flag) {
+				aspect_ratio_idc = u(8, buf, StartBit);
+				if (aspect_ratio_idc == 255) {
+					sar_width = u(16, buf, StartBit);
+					sar_height = u(16, buf, StartBit);
+				}
+			}
+			overscan_info_present_flag = u(1, buf, StartBit);
+			if (overscan_info_present_flag)
+				overscan_appropriate_flagu = u(1, buf, StartBit);
+			video_signal_type_present_flag = u(1, buf, StartBit);
+			if (video_signal_type_present_flag) {
+				video_format = u(3, buf, StartBit);
+				video_full_range_flag = u(1, buf, StartBit);
+				colour_description_present_flag = u(1, buf, StartBit);
+				if (colour_description_present_flag) {
+					colour_primaries = u(8, buf, StartBit);
+					transfer_characteristics = u(8, buf, StartBit);
+					matrix_coefficients = u(8, buf, StartBit);
+				}
+			}
+			chroma_loc_info_present_flag = u(1, buf, StartBit);
+			if (chroma_loc_info_present_flag) {
+				chroma_sample_loc_type_top_field = Ue(buf, nLen, StartBit);
+				chroma_sample_loc_type_bottom_field = Ue(buf, nLen, StartBit);
+			}
+			timing_info_present_flag = u(1, buf, StartBit);
+			if (timing_info_present_flag) {
+				num_units_in_tick = u(32, buf, StartBit);
+				time_scale = u(32, buf, StartBit);
+				fps = time_scale / (2 * num_units_in_tick);
+			}
+		}
+		return true;
+	}
+	return false;
 }
 
 void continueAfterDESCRIBE(RTSPClient* rtspClient, int resultCode, char* resultString);
@@ -140,12 +329,12 @@ void *openURL(void *args) {
 	}
 
 	rtspClient->sendDescribeCommand(continueAfterDESCRIBE, channels[id].rtspAUTH);
-	return (void *) 0;
+	return (void *) EXIT_SUCCESS;
 }
 
 #ifndef NODE_V8_ADDON
 int main(int argc, char** argv) {
-	OutPacketBuffer::maxSize = DUMMY_SINK_RECEIVE_BUFFER_SIZE;
+	//OutPacketBuffer::maxSize = DUMMY_SINK_RECEIVE_BUFFER_SIZE;
 	TaskScheduler* scheduler = BasicTaskScheduler::createNew();
 	thatEnv = BasicUsageEnvironment::createNew(*scheduler);
 
@@ -320,7 +509,7 @@ v8::Handle<v8::Value> StartMethod(const v8::Arguments& args) {
 }
 
 void Init(v8::Handle<v8::Object> exports, v8::Handle<v8::Object> module) {
-	OutPacketBuffer::maxSize = DUMMY_SINK_RECEIVE_BUFFER_SIZE;
+	//OutPacketBuffer::maxSize = DUMMY_SINK_RECEIVE_BUFFER_SIZE;
 	TaskScheduler* scheduler = BasicTaskScheduler::createNew();
 	thatEnv = BasicUsageEnvironment::createNew(*scheduler);
 #ifdef NODE_VERSION_12
@@ -341,8 +530,11 @@ ourRTSPClient* ourRTSPClient::createNew(UsageEnvironment& env, unsigned channelI
 	return new ourRTSPClient(env, channelId);
 }
 
+#define RTSP_CLIENT_VERBOSITY_LEVEL 0
+#define TUNNEL_OVER_HTTP_PORTNUM 0
+
 ourRTSPClient::ourRTSPClient(UsageEnvironment& env, unsigned channelId)
-	: RTSPClient(env, channels[channelId].rtspURL, RTSP_CLIENT_VERBOSITY_LEVEL, "rtmpPusher", 0, -1),
+	: RTSPClient(env, channels[channelId].rtspURL, RTSP_CLIENT_VERBOSITY_LEVEL, "rtmpPusher", TUNNEL_OVER_HTTP_PORTNUM, -1),
 	  publisher(NULL), fChannelId(channelId) {
 }
 
@@ -354,9 +546,7 @@ ourRTSPClient::~ourRTSPClient() {
 	if (publisher != NULL) {
 		Medium::close(publisher);
 	}
-
 	RECONNECT_WAIT_DELAY(rtspReconnectCount);
-
 	openURL(&fChannelId);
 }
 
@@ -366,7 +556,7 @@ ourRTMPClient* ourRTMPClient::createNew(UsageEnvironment& env, RTSPClient* rtspC
 }
 
 ourRTMPClient::ourRTMPClient(UsageEnvironment& env, RTSPClient* rtspClient)
-	: Medium(env), rtmp(NULL), priorTimestamp(0), dts(0), pts(0), fSource(rtspClient) {
+	: Medium(env), rtmp(NULL), fSource(rtspClient) {
 	unsigned id = ((ourRTSPClient*)fSource)->id();
 	do {
 		rtmp = srs_rtmp_create(channels[id].rtmpURL);
@@ -405,26 +595,25 @@ ourRTMPClient::ourRTMPClient(UsageEnvironment& env, RTSPClient* rtspClient)
 }
 
 ourRTMPClient::~ourRTMPClient() {
+	rtmpReconnectCount++;
 #ifdef DEBUG
 	envir() << *fSource << "Cleanup when unpublish. rtmpClient disconnect peer" << "\n";
 #endif
-	rtmpReconnectCount++;
 	srs_rtmp_destroy(rtmp);
 	((ourRTSPClient*)fSource)->publisher = NULL;
-
 	RECONNECT_WAIT_DELAY(rtmpReconnectCount);
 }
 
-Boolean ourRTMPClient::sendH264FramePacket(u_int8_t* data, unsigned size, u_int32_t currTimestamp) {
+Boolean ourRTMPClient::isConnected() {
+	return !(((ourRTSPClient*)fSource)->publisher == NULL);
+}
+
+Boolean ourRTMPClient::sendH264FramePacket(u_int8_t* data, unsigned size, double pts) {
 	do {
-		if (priorTimestamp == 0)
-			priorTimestamp = currTimestamp;
+		if (!isConnected()) break;
 
 		if (NULL != data && size >= 4) {
-			pts = dts += (currTimestamp - priorTimestamp);
-			priorTimestamp = currTimestamp;
-
-			int ret = srs_h264_write_raw_frames(rtmp, (char*) data, size, dts, pts);
+			int ret = srs_h264_write_raw_frames(rtmp, (char*) data, size, pts, pts);
 			if (ret != 0) {
 				if (srs_h264_is_dvbsp_error(ret)) {
 					envir() << *fSource << "ignore drop video error, code=" << ret << "\n";
@@ -434,13 +623,12 @@ Boolean ourRTMPClient::sendH264FramePacket(u_int8_t* data, unsigned size, u_int3
 					envir() << *fSource << "ignore duplicated pps, code=" << ret << "\n";
 				} else {
 					envir() << *fSource << "send h264 raw data failed. code=" << ret << "\n";
-					Medium::close(this);
 					break;
 				}
 			}
 #ifdef DEBUG
 			u_int8_t nut = data[4] & 0x1F;
-			envir() << *fSource << "sent packet: type=video" << ", time=" << dts
+			envir() << *fSource << "sent packet: type=video" << ", time=" << pts
 			<< ", size=" << size << ", b[4]="
 			<< (unsigned char*) data[4] << "("
 			<< (isSPS(nut) ? "SPS" : (isPPS(nut) ? "PPS" : (isIDR(nut) ? "I" : (isNonIDR(nut) ? "P" : "Unknown"))))
@@ -450,6 +638,7 @@ Boolean ourRTMPClient::sendH264FramePacket(u_int8_t* data, unsigned size, u_int3
 		return True;
 	} while (0);
 
+	Medium::close(this);
 	return False;
 }
 
@@ -468,102 +657,85 @@ StreamClientState::~StreamClientState() {
 	}
 }
 
-// Implementation of "DummySink":
-DummySink* DummySink::createNew(UsageEnvironment& env, MediaSubsession& subsession, char const* streamId) {
-	return new DummySink(env, subsession, streamId);
+// Implementation of "DummyRTPSink":
+DummyRTPSink* DummyRTPSink::createNew(UsageEnvironment& env, MediaSubsession& subsession, char const* streamId) {
+	return new DummyRTPSink(env, subsession, streamId);
 }
 
-DummySink::DummySink(UsageEnvironment& env, MediaSubsession& subsession, char const* streamId)
-	: MediaSink(env), fSps(NULL), fPps(NULL), fSpsSize(0), fPpsSize(0), fSubsession(subsession),
+DummyRTPSink::DummyRTPSink(UsageEnvironment& env, MediaSubsession& subsession, char const* streamId)
+	: MediaSink(env), fSps(NULL), fPps(NULL), fSpsSize(0), fPpsSize(0), fReceiveBuffer(NULL), fBufferSize(388800), fSubsession(subsession),
 	  fHaveWrittenFirstFrame(True) {
 	fStreamId = strDup(streamId);
-	fReceiveBuffer = new u_int8_t[DUMMY_SINK_RECEIVE_BUFFER_SIZE];
-
-	ourRTSPClient* rtspClient = (ourRTSPClient*) subsession.miscPtr;
-	if (rtspClient->publisher == NULL) {
-#ifdef DEBUG
-		envir() << *rtspClient << "Start Creating ourRTMPClient ..." << "\n";
-#endif
-		ourRTMPClient::createNew(env, rtspClient);
-		if (rtspClient->publisher == NULL) {
-			envir() << *rtspClient << "\n\tPublish the failed. endpoint:\""
-					<< channels[rtspClient->id()].rtmpURL << "\n";
-		}
-	}
+	fReceiveBuffer = new u_int8_t[fBufferSize];
 }
 
-DummySink::~DummySink() {
+DummyRTPSink::~DummyRTPSink() {
 	delete[] fReceiveBuffer; fReceiveBuffer = NULL;
 	delete[] fStreamId; fStreamId = NULL;
 }
 
-void DummySink::afterGettingFrame(void* clientData, unsigned frameSize,
-		unsigned numTruncatedBytes, struct timeval presentationTime,
-		unsigned durationInMicroseconds) {
-	DummySink* sink = (DummySink*) clientData;
+void DummyRTPSink::afterGettingFrame(void* clientData, unsigned frameSize,
+		unsigned numTruncatedBytes, struct timeval presentationTime, unsigned durationInMicroseconds) {
+	DummyRTPSink* sink = (DummyRTPSink*) clientData;
 	sink->afterGettingFrame(frameSize, numTruncatedBytes, presentationTime, durationInMicroseconds);
 }
 
-void DummySink::afterGettingFrame(unsigned frameSize, unsigned numTruncatedBytes, struct timeval presentationTime,
+void DummyRTPSink::afterGettingFrame(unsigned frameSize, unsigned numTruncatedBytes, struct timeval presentationTime,
 		unsigned /*durationInMicroseconds*/) {
-	ourRTSPClient* rtspClient = (ourRTSPClient*)fSubsession.miscPtr;
+	ourRTSPClient* rtspClient = (ourRTSPClient*)(fSubsession.miscPtr);
 	StreamClientState& scs = rtspClient->scs;
 
-	u_int8_t nal_unit_type = fReceiveBuffer[4] & 0x1F; //0xFF;
 	gettimeofday(&scs.lastGettingFrameTime, NULL);
 
-	u_int32_t timestamp = scs.lastGettingFrameTime.tv_sec * 1000 + scs.lastGettingFrameTime.tv_usec / 1000;
-
-	if (rtspClient->publisher == NULL)
-		goto RECONNECT;
+	u_int8_t nal_unit_type = fReceiveBuffer[4] & 0x1F; //0xFF;
 
 	if (fHaveWrittenFirstFrame) {
-		if (!isSPS(nal_unit_type) && !isPPS(nal_unit_type) && !isIDR(nal_unit_type))
-			goto NEXT;
-		else if (isSPS(nal_unit_type)) {
-			if (!sendSpsPacket(fReceiveBuffer + 4, frameSize, timestamp))
+		if (isSPS(nal_unit_type)) {
+			if (!sendSpsPacket(fReceiveBuffer+4, frameSize, 0))
 				goto RECONNECT;
 		} else if (isPPS(nal_unit_type)) {
-			if (!sendPpsPacket(fReceiveBuffer + 4, frameSize, timestamp))
+			if (!sendPpsPacket(fReceiveBuffer+4, frameSize, 0))
 				goto RECONNECT;
 			fHaveWrittenFirstFrame = False;
 		} else if (isIDR(nal_unit_type)) {
 			//send sdp: sprop-parameter-sets
-			if (!((ourRTMPClient*)rtspClient->publisher)->sendH264FramePacket(fSps, fSpsSize, timestamp))
+			if (!sendRawPacket(fSps, fSpsSize, 0))
 				goto RECONNECT;
-
-			if (!((ourRTMPClient*)rtspClient->publisher)->sendH264FramePacket(fPps, fPpsSize, timestamp))
+			if (!sendRawPacket(fPps, fPpsSize, 0))
 				goto RECONNECT;
-
 			fHaveWrittenFirstFrame = False;
 		}
-		goto NEXT;
+
+		goto NEXT_FRAME;
 	}
 
-	if (strcasecmp(fSubsession.mediumName(), "video") == 0 && (isIDR(nal_unit_type) || isNonIDR(nal_unit_type))) {
-		fReceiveBuffer[0] = 0; fReceiveBuffer[1] = 0;
-		fReceiveBuffer[2] = 0; fReceiveBuffer[3] = 1;
-		if (!((ourRTMPClient*)rtspClient->publisher)->sendH264FramePacket(fReceiveBuffer, frameSize + 4, timestamp))
-			goto RECONNECT;
-	}
-	goto NEXT;
+	if (strcasecmp(fSubsession.mediumName(), "video") == 0 &&
+			strcasecmp(fSubsession.codecName(), "H264") == 0) {
+		double timestamp = fSubsession.getNormalPlayTime(presentationTime) * 1000;
 
+		if (sendRawPacket(fReceiveBuffer, frameSize + 4, timestamp))
+			goto NEXT_FRAME;
+	} else if (strcasecmp(fSubsession.mediumName(), "audio") == 0) {
+		goto NEXT_FRAME;
+	}
 RECONNECT:
 	fHaveWrittenFirstFrame = True;
 	ourRTMPClient::createNew(envir(),rtspClient);
-NEXT:
+NEXT_FRAME:
 	continuePlaying();
 }
 
-Boolean DummySink::continuePlaying() {
-	if (fSource == NULL)
-		return False;
-	fSource->getNextFrame(fReceiveBuffer + 4, DUMMY_SINK_RECEIVE_BUFFER_SIZE - 4, afterGettingFrame, this, onSourceClosure, this);
+Boolean DummyRTPSink::continuePlaying() {
+	if (fSource == NULL) return False;
+
+	fReceiveBuffer[0] = 0; fReceiveBuffer[1] = 0;
+	fReceiveBuffer[2] = 0; fReceiveBuffer[3] = 1;
+
+	fSource->getNextFrame(fReceiveBuffer+4, fBufferSize-4, afterGettingFrame, this, onSourceClosure, this);
 	return True;
 }
 
 void continueAfterDESCRIBE(RTSPClient* rtspClient, int resultCode, char* resultString) {
-	int nextStepFlag = 0;
 	do {
 		UsageEnvironment& env = rtspClient->envir();
 		StreamClientState& scs = ((ourRTSPClient*) rtspClient)->scs;
@@ -587,7 +759,6 @@ void continueAfterDESCRIBE(RTSPClient* rtspClient, int resultCode, char* resultS
 		// Create a media session object from this SDP description:
 		scs.session = MediaSession::createNew(env, sdpDescription);
 		delete[] sdpDescription; sdpDescription = NULL;
-
 		if (scs.session == NULL) {
 			env << *rtspClient << "Failed to create a MediaSession object from the SDP description: " << env.getResultMsg() << "\n";
 			break;
@@ -595,119 +766,14 @@ void continueAfterDESCRIBE(RTSPClient* rtspClient, int resultCode, char* resultS
 			env << *rtspClient << "This session has no media subsessions (i.e., no \"m=\" lines)\n";
 			break;
 		}
+
 		scs.iter = new MediaSubsessionIterator(*scs.session);
 		setupNextSubsession(rtspClient);
-		nextStepFlag += 1;
+		return;
 	} while (0);
 
 	// An unrecoverable error occurred with this stream.
-	if (nextStepFlag == 0) {
-		shutdownStream(rtspClient);
-	}
-}
-
-void continueAfterSETUP(RTSPClient* rtspClient, int resultCode, char* resultString) {
-	int nextStepFlag = 0;
-	do {
-		UsageEnvironment& env = rtspClient->envir();
-		StreamClientState& scs = ((ourRTSPClient*) rtspClient)->scs;
-		scs.subsession->miscPtr = rtspClient;
-
-		if (resultCode != 0) {
-			env << *rtspClient << "Failed to set up the \"" << *scs.subsession << "\" subsession: " << resultString << "\n";
-			break;
-		}
-#ifdef DEBUG
-		env << *rtspClient << "Set up the \"" << *scs.subsession << "\" subsession (";
-		if (scs.subsession->rtcpIsMuxed()) {
-			env << "client port " << scs.subsession->clientPortNum();
-		} else {
-			env << "client ports " << scs.subsession->clientPortNum() << "-" << scs.subsession->clientPortNum() + 1;
-		}
-		env << ")\n";
-#endif
-		scs.subsession->sink = DummySink::createNew(env, *scs.subsession);
-		// perhaps use your own custom "MediaSink" subclass instead
-		if (scs.subsession->sink == NULL) {
-			env << *rtspClient << "Failed to create a data sink for the \""
-					<< *scs.subsession << "\" subsession: " << env.getResultMsg() << "\n";
-			break;
-		}
-
-		if (strcasecmp(scs.subsession->mediumName(), "video") == 0
-				&& strcasecmp(scs.subsession->codecName(), "H264") == 0) {
-			const char* spropStr = scs.subsession->attrVal_str("sprop-parameter-sets");
-			if ( NULL != spropStr) {
-				unsigned numSPropRecords = 0;
-				DummySink* dummySink = (DummySink*) scs.subsession->sink;
-				SPropRecord* r = parseSPropParameterSets(spropStr, numSPropRecords);
-				for (unsigned n = 0; n < numSPropRecords; ++n) {
-					u_int8_t nal_unit_type = r[n].sPropBytes[0] & 0x1F;
-					if (isSPS(nal_unit_type)) {
-						dummySink->sendSpsPacket(r[n].sPropBytes, r[n].sPropLength);
-					} else if (isPPS(nal_unit_type)) {
-						dummySink->sendPpsPacket(r[n].sPropBytes, r[n].sPropLength);
-					}
-				}
-				delete[] r; r = NULL;
-			}
-		}
-#ifdef DEBUG
-		env << *rtspClient << "Created a data sink for the \"" << *scs.subsession << "\" subsession\n";
-#endif
-		scs.subsession->sink->startPlaying(*scs.subsession->readSource(), subsessionAfterPlaying, scs.subsession);
-		if (scs.subsession->rtcpInstance() != NULL) {
-			scs.subsession->rtcpInstance()->setByeHandler(subsessionByeHandler, scs.subsession);
-		}
-		nextStepFlag += 1;
-	} while (0);
-
-	delete[] resultString; resultString = NULL;
-
-	if (nextStepFlag == 0)
-		shutdownStream(rtspClient);
-	else
-		setupNextSubsession(rtspClient);
-}
-
-void continueAfterPLAY(RTSPClient* rtspClient, int resultCode, char* resultString) {
-	int nextStepFlag = 0;
-	do {
-		UsageEnvironment& env = rtspClient->envir();
-		StreamClientState& scs = ((ourRTSPClient*) rtspClient)->scs;
-
-		if (resultCode != 0) {
-			env << *rtspClient << "Failed to start playing session: " << resultString << "\n";
-			break;
-		}
-
-		if (scs.duration > 0) {
-			unsigned const delaySlop = 2;
-			scs.duration += delaySlop;
-			unsigned uSecsToDelay = (unsigned) (scs.duration * 1000000);
-			scs.streamTimerTask = env.taskScheduler().scheduleDelayedTask(
-					uSecsToDelay, (TaskFunc*) streamTimerHandler,
-					scs.subsession);
-		}
-#ifdef DEBUG
-		env << *rtspClient << "Started playing session";
-		if (scs.duration > 0) {
-			env << " (for up to " << scs.duration << " seconds)";
-		}
-		env << "...\n";
-#endif
-		scs.checkAliveTimerTask = env.taskScheduler().scheduleDelayedTask(
-				CHECK_ALIVE_TASK_TIMER_INTERVAL,
-				(TaskFunc*) sendLivenessCommandHandler, rtspClient);
-		nextStepFlag += 1;
-		rtspReconnectCount = 0;
-	} while (0);
-
-	delete[] resultString; resultString = NULL;
-
-	if (nextStepFlag == 0) {
-		shutdownStream(rtspClient);
-	}
+	shutdownStream(rtspClient);
 }
 
 void setupNextSubsession(RTSPClient* rtspClient) {
@@ -747,6 +813,181 @@ void setupNextSubsession(RTSPClient* rtspClient) {
 	}
 }
 
+void continueAfterSETUP(RTSPClient* rtspClient, int resultCode, char* resultString) {
+	Boolean success = False;
+	do {
+		UsageEnvironment& env = rtspClient->envir();
+		StreamClientState& scs = ((ourRTSPClient*) rtspClient)->scs;
+
+		if (resultCode != 0) {
+			env << *rtspClient << "Failed to set up the \"" << *scs.subsession << "\" subsession: " << resultString << "\n";
+			break;
+		}
+#ifdef DEBUG
+		env << *rtspClient << "Set up the \"" << *scs.subsession << "\" subsession (";
+		if (scs.subsession->rtcpIsMuxed()) {
+			env << "client port " << scs.subsession->clientPortNum();
+		} else {
+			env << "client ports " << scs.subsession->clientPortNum() << "-" << scs.subsession->clientPortNum() + 1;
+		}
+		env << ")\n";
+#endif
+		scs.subsession->sink = DummyRTPSink::createNew(env, *scs.subsession, rtspClient->url());
+		if (scs.subsession->sink == NULL) {
+			env << *rtspClient << "Failed to create a data sink for the \""
+					<< *scs.subsession << "\" subsession: " << env.getResultMsg() << "\n";
+			break;
+		}
+
+		if (strcasecmp(scs.subsession->mediumName(), "video") == 0
+				&& strcasecmp(scs.subsession->codecName(), "H264") == 0) {
+			const char* spropStr = scs.subsession->attrVal_str("sprop-parameter-sets");
+			if ( NULL != spropStr) {
+				unsigned numSPropRecords = 0;
+				DummyRTPSink* sink = (DummyRTPSink*) scs.subsession->sink;
+				SPropRecord* r = parseSPropParameterSets(spropStr, numSPropRecords);
+				for (unsigned n = 0; n < numSPropRecords; ++n) {
+					u_int8_t nal_unit_type = r[n].sPropBytes[0] & 0x1F;
+					if (isSPS(nal_unit_type)) {
+						unsigned width, height, fps;
+						h264_decode_sps(r[n].sPropBytes, r[n].sPropLength, width, height, fps);
+#ifdef DEBUG
+						env << "width: " << width << " height: " << height << " fps: " << fps << "\n";
+#endif
+						if (width > 0 && height > 0) {
+							sink->setBufferSize(width * height * 1.5 / 8);
+						}
+						sink->sendSpsPacket(r[n].sPropBytes, r[n].sPropLength);
+					} else if (isPPS(nal_unit_type)) {
+						sink->sendPpsPacket(r[n].sPropBytes, r[n].sPropLength);
+					}
+				}
+				delete[] r; r = NULL;
+			}
+		}
+#ifdef DEBUG
+		env << *rtspClient << "Created a data sink for the \"" << *scs.subsession << "\" subsession\n";
+#endif
+		scs.subsession->miscPtr = rtspClient;
+		scs.subsession->sink->startPlaying(*(scs.subsession->readSource()), subsessionAfterPlaying, scs.subsession);
+
+		if (scs.subsession->rtcpInstance() != NULL) {
+			scs.subsession->rtcpInstance()->setByeHandler(subsessionByeHandler, scs.subsession);
+		}
+		success = True;
+	} while (0);
+
+	delete[] resultString; resultString = NULL;
+
+	if (success)
+		setupNextSubsession(rtspClient);
+	else
+		shutdownStream(rtspClient);
+
+}
+
+void continueAfterPLAY(RTSPClient* rtspClient, int resultCode, char* resultString) {
+	Boolean success = False;
+	do {
+		UsageEnvironment& env = rtspClient->envir();
+		StreamClientState& scs = ((ourRTSPClient*) rtspClient)->scs;
+
+		if (resultCode != 0) {
+			env << *rtspClient << "Failed to start playing session: " << resultString << "\n";
+			break;
+		}
+
+		if (scs.duration > 0) {
+			unsigned const delaySlop = 2;
+			scs.duration += delaySlop;
+			unsigned uSecsToDelay = (unsigned) (scs.duration * 1000000);
+			scs.streamTimerTask = env.taskScheduler().scheduleDelayedTask(uSecsToDelay,
+				(TaskFunc*) streamTimerHandler, rtspClient);
+		}
+#ifdef DEBUG
+		env << *rtspClient << "Started playing session";
+		if (scs.duration > 0) {
+			env << " (for up to " << scs.duration << " seconds)";
+		}
+		env << "...\n";
+#endif
+
+		if (((ourRTSPClient*)rtspClient)->publisher == NULL) {
+#ifdef DEBUG
+			env << *rtspClient << "Start Creating ourRTMPClient ..." << "\n";
+#endif
+			ourRTMPClient::createNew(env, rtspClient);
+			if (((ourRTSPClient*)rtspClient)->publisher == NULL) {
+				env << *rtspClient << "\n\tPublish the failed. endpoint:\"" << channels[((ourRTSPClient*)rtspClient)->id()].rtmpURL << "\n";
+				break;
+			}
+		}
+		scs.checkAliveTimerTask = env.taskScheduler().scheduleDelayedTask(CHECK_ALIVE_TASK_TIMER_INTERVAL,
+				(TaskFunc*) sendLivenessCommandHandler, rtspClient);
+		rtspReconnectCount = 0;
+		success = True;
+	} while (0);
+
+	delete[] resultString; resultString = NULL;
+
+	if (!success) {
+		shutdownStream(rtspClient);
+	}
+}
+
+void subsessionAfterPlaying(void* clientData) {
+	MediaSubsession* subsession = (MediaSubsession*) clientData;
+	RTSPClient* rtspClient = (RTSPClient*)(subsession->miscPtr);
+
+	Medium::close(subsession->sink);
+	subsession->sink = NULL;
+
+	MediaSession& session = subsession->parentSession();
+	MediaSubsessionIterator iter(session);
+	while ((subsession = iter.next()) != NULL) {
+		if (subsession->sink != NULL) return;
+	}
+
+	shutdownStream(rtspClient);
+}
+
+void subsessionByeHandler(void* clientData) {
+	MediaSubsession* subsession = (MediaSubsession*) clientData;
+#ifdef DEBUG
+	RTSPClient* rtspClient = (RTSPClient*)(subsession->miscPtr);
+	UsageEnvironment& env = rtspClient->envir();
+	env << *rtspClient << "Received RTCP \"BYE\" on \"" << *subsession << "\" subsession\n";
+#endif
+	subsessionAfterPlaying(subsession);
+}
+
+void streamTimerHandler(void* clientData) {
+	ourRTSPClient* rtspClient = (ourRTSPClient*) clientData;
+	StreamClientState& scs = rtspClient->scs;
+	scs.streamTimerTask = NULL;
+	shutdownStream(rtspClient);
+}
+
+void sendLivenessCommandHandler(void* clientData) {
+	ourRTSPClient* rtspClient = (ourRTSPClient*) clientData;
+	UsageEnvironment& env = rtspClient->envir();
+	StreamClientState& scs = rtspClient->scs;
+
+	struct timeval timeNow;
+	gettimeofday(&timeNow, NULL);
+
+	if (timeNow.tv_sec - scs.lastGettingFrameTime.tv_sec > 3) {
+		scs.checkAliveTimerTask = NULL;
+		shutdownStream(rtspClient);
+		return;
+	}
+
+	if (rtspClient->sendGetParameterCommand(*scs.session, NULL, NULL) > 0) {
+		scs.checkAliveTimerTask = env.taskScheduler().scheduleDelayedTask(CHECK_ALIVE_TASK_TIMER_INTERVAL,
+				(TaskFunc*) sendLivenessCommandHandler, rtspClient);
+	}
+}
+
 void shutdownStream(RTSPClient* rtspClient, int exitCode) {
 	StreamClientState& scs = ((ourRTSPClient*) rtspClient)->scs;
 
@@ -759,9 +1000,11 @@ void shutdownStream(RTSPClient* rtspClient, int exitCode) {
 			if (subsession->sink != NULL) {
 				Medium::close(subsession->sink);
 				subsession->sink = NULL;
+
 				if (subsession->rtcpInstance() != NULL) {
 					subsession->rtcpInstance()->setByeHandler(NULL, NULL); // in case the server sends a RTCP "BYE" while handling "TEARDOWN"
 				}
+
 				someSubsessionsWereActive = True;
 			}
 		}
@@ -770,64 +1013,13 @@ void shutdownStream(RTSPClient* rtspClient, int exitCode) {
 			rtspClient->sendTeardownCommand(*scs.session, NULL);
 		}
 	}
+
 	Medium::close(rtspClient);
-}
-
-void subsessionAfterPlaying(void* clientData) {
-	MediaSubsession* subsession = (MediaSubsession*) clientData;
-	RTSPClient* rtspClient = (RTSPClient*) subsession->miscPtr;
-
-	Medium::close(subsession->sink);
-	subsession->sink = NULL;
-
-	MediaSession& session = subsession->parentSession();
-	MediaSubsessionIterator iter(session);
-	while ((subsession = iter.next()) != NULL) {
-		if (subsession->sink != NULL)
-			return;
-	}
-	shutdownStream(rtspClient);
-}
-
-void subsessionByeHandler(void* clientData) {
-	MediaSubsession* subsession = (MediaSubsession*) clientData;
-#ifdef DEBUG
-	RTSPClient* rtspClient = (RTSPClient*) subsession->miscPtr;
-	UsageEnvironment& env = rtspClient->envir();
-	env << *rtspClient << "Received RTCP \"BYE\" on \"" << *subsession << "\" subsession\n";
-#endif
-	subsessionAfterPlaying(subsession);
-}
-
-void sendLivenessCommandHandler(void* clientData) {
-	ourRTSPClient* rtspClient = (ourRTSPClient*) clientData;
-	UsageEnvironment& env = rtspClient->envir();
-	StreamClientState& scs = rtspClient->scs;
-
-	struct timeval timeNow;
-	gettimeofday(&timeNow, NULL);
-
-	if (timeNow.tv_sec - scs.lastGettingFrameTime.tv_sec < 3) {
-		rtspClient->sendGetParameterCommand(*scs.session, NULL, NULL);
-		scs.checkAliveTimerTask = env.taskScheduler().scheduleDelayedTask(
-				CHECK_ALIVE_TASK_TIMER_INTERVAL,
-				(TaskFunc*) sendLivenessCommandHandler, rtspClient);
-	} else {
-		scs.checkAliveTimerTask = NULL;
-		shutdownStream(rtspClient);
-	}
-}
-
-void streamTimerHandler(void* clientData) {
-	ourRTSPClient* rtspClient = (ourRTSPClient*) clientData;
-	StreamClientState& scs = rtspClient->scs;
-	scs.streamTimerTask = NULL;
-	shutdownStream(rtspClient);
 }
 
 void usage(UsageEnvironment& env) {
 	env << "Usage: " << progName << " -c <conf> [-d]\n";
 	env << "Options:" << "\n";
-	env << "\t-c: load config file" << "\n";
-	env << "\t-d: daemon mode" << "\n";
+	env << " -c: load config file" << "\n";
+	env << " -d: daemon mode" << "\n";
 }
