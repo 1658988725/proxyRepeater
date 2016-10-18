@@ -42,6 +42,7 @@ protected:
 	Boolean isConnected();
 public:
 	Boolean sendH264FramePacket(u_int8_t* data, unsigned size, double pts);
+	Boolean sendAACFramePacket(u_int8_t* data, unsigned size, double pts);
 private:
 	srs_rtmp_t rtmp;
 	RTSPClient* fSource;
@@ -84,12 +85,17 @@ public:
 										delete[] fReceiveBuffer; \
 										fReceiveBuffer = new u_int8_t[size]; }
 
-	Boolean sendRawPacket(u_int8_t* data, unsigned size, double pts) {
+	//unsigned getBufferSize() const { return fBufferSize; }
+
+	Boolean sendRawPacket(u_int8_t* data, unsigned size, double pts, Boolean isVideo = True) {
 		if (pts < 0)
 			return True;
 		else {
 			ourRTMPClient* rtmpClient = (ourRTMPClient*)((ourRTSPClient*) fSubsession.miscPtr)->publisher;
-			return rtmpClient->sendH264FramePacket(data, size, pts);
+			if(isVideo)
+				return rtmpClient->sendH264FramePacket(data, size, pts);
+			else
+				return rtmpClient->sendAACFramePacket(data, size, pts);
 		}
 	}
 

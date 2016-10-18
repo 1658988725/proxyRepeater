@@ -1,5 +1,6 @@
-#include <vector>
-#include <pthread.h>
+#include "rtmpPusher.hh"
+#include "cJSON.h"
+#include "ourMD5.hh"
 
 #ifdef NODE_V8_ADDON
 #include <node.h>
@@ -10,10 +11,8 @@
 #endif
 #endif
 
-#include "rtmpPusher.hh"
-#include "cJSON.h"
-#include "ourMD5.hh"
-#include "BitVector.hh"
+#include <vector>
+#include <pthread.h>
 
 using namespace std;
 
@@ -113,123 +112,94 @@ int parseConfData(cJSON* conf) {
 
 int h264_decode_sps(BYTE * buf, unsigned int nLen, unsigned &width, unsigned &height, unsigned &fps) {
 	UINT StartBit = 0;
+	unsigned chroma_format_idc = 0;
+	unsigned frame_crop_left_offset;
+	unsigned frame_crop_right_offset;
+	unsigned frame_crop_top_offset;
+	unsigned frame_crop_bottom_offset;
 	fps = 0;
 	de_emulation_prevention(buf, &nLen);
 
-	int forbidden_zero_bit;
-	int nal_ref_idc;
-	int nal_unit_type;
-	int profile_idc;
-	int constraint_set0_flag;
-	int constraint_set1_flag;
-	int constraint_set2_flag;
-	int constraint_set3_flag;
-	int reserved_zero_4bits;
-	int level_idc;
-	int seq_parameter_set_id;
-	int chroma_format_idc = 0;
-	int residual_colour_transform_flag;
-	int bit_depth_luma_minus8;
-	int bit_depth_chroma_minus8;
-	int qpprime_y_zero_transform_bypass_flag;
-	int seq_scaling_matrix_present_flag;
-	int seq_scaling_list_present_flag[8];
-	int log2_max_frame_num_minus4;
-	int pic_order_cnt_type;
-	int log2_max_pic_order_cnt_lsb_minus4;
-	int delta_pic_order_always_zero_flag;
-	int offset_for_non_ref_pic;
-	int offset_for_top_to_bottom_field;
-	int num_ref_frames_in_pic_order_cnt_cycle;
-	int num_ref_frames;
-	int gaps_in_frame_num_value_allowed_flag;
-	int pic_width_in_mbs_minus1;
-	int pic_height_in_map_units_minus1;
-	int frame_mbs_only_flag;
-	int mb_adaptive_frame_field_flag;
-	int direct_8x8_inference_flag;
-	int frame_cropping_flag;
-	int frame_crop_left_offset;
-	int frame_crop_right_offset;
-	int frame_crop_top_offset;
-	int frame_crop_bottom_offset;
-	int vui_parameter_present_flag;
-	int aspect_ratio_info_present_flag;
-	int aspect_ratio_idc;
-	int sar_width;
-	int sar_height;
-	int overscan_info_present_flag;
-	int overscan_appropriate_flagu;
-	int video_signal_type_present_flag;
-	int video_format;
-	int video_full_range_flag;
-	int colour_description_present_flag;
-	int colour_primaries;
-	int transfer_characteristics;
-	int matrix_coefficients;
-	int chroma_loc_info_present_flag;
-	int chroma_sample_loc_type_top_field;
-	int chroma_sample_loc_type_bottom_field;
-	int timing_info_present_flag;
-	int num_units_in_tick;
-	int time_scale;
-
-	forbidden_zero_bit = u(1, buf, StartBit);
-	nal_ref_idc = u(2, buf, StartBit);
-	nal_unit_type = u(5, buf, StartBit);
+	//forbidden_zero_bit =
+	u(1, buf, StartBit);
+	//nal_ref_idc =
+	u(2, buf, StartBit);
+	int nal_unit_type = u(5, buf, StartBit);
 	if (nal_unit_type == 7) {
-		profile_idc = u(8, buf, StartBit);
-		constraint_set0_flag = u(1, buf, StartBit); //(buf[1] & 0x80)>>7;
-		constraint_set1_flag = u(1, buf, StartBit); //(buf[1] & 0x40)>>6;
-		constraint_set2_flag = u(1, buf, StartBit); //(buf[1] & 0x20)>>5;
-		constraint_set3_flag = u(1, buf, StartBit); //(buf[1] & 0x10)>>4;
-		reserved_zero_4bits = u(4, buf, StartBit);
-		level_idc = u(8, buf, StartBit);
+		int profile_idc = u(8, buf, StartBit);
+		//constraint_set0_flag =
+		u(1, buf, StartBit); //(buf[1] & 0x80)>>7;
+		//constraint_set1_flag =
+		u(1, buf, StartBit); //(buf[1] & 0x40)>>6;
+		//constraint_set2_flag =
+		u(1, buf, StartBit); //(buf[1] & 0x20)>>5;
+		//constraint_set3_flag =
+		u(1, buf, StartBit); //(buf[1] & 0x10)>>4;
+		//reserved_zero_4bits =
+		u(4, buf, StartBit);
+		//level_idc =
+		u(8, buf, StartBit);
 
-		seq_parameter_set_id = Ue(buf, nLen, StartBit);
+		//seq_parameter_set_id =
+		Ue(buf, nLen, StartBit);
 
 		if (profile_idc == 100 || profile_idc == 110 || profile_idc == 122
 				|| profile_idc == 144) {
 			chroma_format_idc = Ue(buf, nLen, StartBit);
 			if (chroma_format_idc == 3)
-				residual_colour_transform_flag = u(1, buf, StartBit);
-			bit_depth_luma_minus8 = Ue(buf, nLen, StartBit);
-			bit_depth_chroma_minus8 = Ue(buf, nLen, StartBit);
-			qpprime_y_zero_transform_bypass_flag = u(1, buf, StartBit);
-			seq_scaling_matrix_present_flag = u(1, buf, StartBit);
+				//residual_colour_transform_flag =
+				u(1, buf, StartBit);
+			//bit_depth_luma_minus8 =
+			Ue(buf, nLen, StartBit);
+			//bit_depth_chroma_minus8 =
+			Ue(buf, nLen, StartBit);
+			//qpprime_y_zero_transform_bypass_flag =
+			u(1, buf, StartBit);
 
+			int seq_scaling_matrix_present_flag = u(1, buf, StartBit);
 			if (seq_scaling_matrix_present_flag) {
 				for (int i = 0; i < 8; i++) {
-					seq_scaling_list_present_flag[i] = u(1, buf, StartBit);
+					//seq_scaling_list_present_flag[i] =
+					u(1, buf, StartBit);
 				}
 			}
 		}
-		log2_max_frame_num_minus4 = Ue(buf, nLen, StartBit);
-		pic_order_cnt_type = Ue(buf, nLen, StartBit);
+		//log2_max_frame_num_minus4 =
+		Ue(buf, nLen, StartBit);
+		int pic_order_cnt_type = Ue(buf, nLen, StartBit);
 		if (pic_order_cnt_type == 0)
-			log2_max_pic_order_cnt_lsb_minus4 = Ue(buf, nLen, StartBit);
+			//log2_max_pic_order_cnt_lsb_minus4 =
+			Ue(buf, nLen, StartBit);
 		else if (pic_order_cnt_type == 1) {
-			delta_pic_order_always_zero_flag = u(1, buf, StartBit);
-			offset_for_non_ref_pic = Se(buf, nLen, StartBit);
-			offset_for_top_to_bottom_field = Se(buf, nLen, StartBit);
-			num_ref_frames_in_pic_order_cnt_cycle = Ue(buf, nLen, StartBit);
+			//delta_pic_order_always_zero_flag =
+			u(1, buf, StartBit);
+			//offset_for_non_ref_pic =
+			Se(buf, nLen, StartBit);
+			//offset_for_top_to_bottom_field =
+			Se(buf, nLen, StartBit);
+			int num_ref_frames_in_pic_order_cnt_cycle = Ue(buf, nLen, StartBit);
 
 			int *offset_for_ref_frame = new int[num_ref_frames_in_pic_order_cnt_cycle];
 			for (int i = 0; i < num_ref_frames_in_pic_order_cnt_cycle; i++)
 				offset_for_ref_frame[i] = Se(buf, nLen, StartBit);
 			delete[] offset_for_ref_frame;
 		}
-		num_ref_frames = Ue(buf, nLen, StartBit);
-		gaps_in_frame_num_value_allowed_flag = u(1, buf, StartBit);
-		pic_width_in_mbs_minus1 = Ue(buf, nLen, StartBit);
-		pic_height_in_map_units_minus1 = Ue(buf, nLen, StartBit);
 
-		frame_mbs_only_flag = u(1, buf, StartBit);
+		//num_ref_frames =
+		Ue(buf, nLen, StartBit);
+		//gaps_in_frame_num_value_allowed_flag =
+		u(1, buf, StartBit);
+		int pic_width_in_mbs_minus1 = Ue(buf, nLen, StartBit);
+		int pic_height_in_map_units_minus1 = Ue(buf, nLen, StartBit);
+
+		int frame_mbs_only_flag = u(1, buf, StartBit);
 		if (!frame_mbs_only_flag)
-			mb_adaptive_frame_field_flag = u(1, buf, StartBit);
+			//mb_adaptive_frame_field_flag =
+			u(1, buf, StartBit);
 
-		direct_8x8_inference_flag = u(1, buf, StartBit);
-		frame_cropping_flag = u(1, buf, StartBit);
+		//direct_8x8_inference_flag =
+		u(1, buf, StartBit);
+		int frame_cropping_flag = u(1, buf, StartBit);
 		if (frame_cropping_flag) {
 			frame_crop_left_offset = Ue(buf, nLen, StartBit);
 			frame_crop_right_offset = Ue(buf, nLen, StartBit);
@@ -265,39 +235,53 @@ int h264_decode_sps(BYTE * buf, unsigned int nLen, unsigned &width, unsigned &he
 			height -= crop_unit_y * (frame_crop_top_offset + frame_crop_bottom_offset);
 		}
 
-		vui_parameter_present_flag = u(1, buf, StartBit);
+		int vui_parameter_present_flag = u(1, buf, StartBit);
 		if (vui_parameter_present_flag) {
-			aspect_ratio_info_present_flag = u(1, buf, StartBit);
+			int aspect_ratio_info_present_flag = u(1, buf, StartBit);
 			if (aspect_ratio_info_present_flag) {
-				aspect_ratio_idc = u(8, buf, StartBit);
+				int aspect_ratio_idc = u(8, buf, StartBit);
 				if (aspect_ratio_idc == 255) {
-					sar_width = u(16, buf, StartBit);
-					sar_height = u(16, buf, StartBit);
+					//sar_width =
+					u(16, buf, StartBit);
+					//sar_height =
+					u(16, buf, StartBit);
 				}
 			}
-			overscan_info_present_flag = u(1, buf, StartBit);
+
+			int overscan_info_present_flag = u(1, buf, StartBit);
 			if (overscan_info_present_flag)
-				overscan_appropriate_flagu = u(1, buf, StartBit);
-			video_signal_type_present_flag = u(1, buf, StartBit);
+				//overscan_appropriate_flagu =
+				u(1, buf, StartBit);
+
+			int video_signal_type_present_flag = u(1, buf, StartBit);
 			if (video_signal_type_present_flag) {
-				video_format = u(3, buf, StartBit);
-				video_full_range_flag = u(1, buf, StartBit);
-				colour_description_present_flag = u(1, buf, StartBit);
+				//video_format =
+				u(3, buf, StartBit);
+				//video_full_range_flag =
+				u(1, buf, StartBit);
+				int colour_description_present_flag = u(1, buf, StartBit);
 				if (colour_description_present_flag) {
-					colour_primaries = u(8, buf, StartBit);
-					transfer_characteristics = u(8, buf, StartBit);
-					matrix_coefficients = u(8, buf, StartBit);
+					//colour_primaries =
+					u(8, buf, StartBit);
+					//transfer_characteristics =
+					u(8, buf, StartBit);
+					//matrix_coefficients =
+					u(8, buf, StartBit);
 				}
 			}
-			chroma_loc_info_present_flag = u(1, buf, StartBit);
+
+			int chroma_loc_info_present_flag = u(1, buf, StartBit);
 			if (chroma_loc_info_present_flag) {
-				chroma_sample_loc_type_top_field = Ue(buf, nLen, StartBit);
-				chroma_sample_loc_type_bottom_field = Ue(buf, nLen, StartBit);
+				//chroma_sample_loc_type_top_field =
+				Ue(buf, nLen, StartBit);
+				//chroma_sample_loc_type_bottom_field =
+				Ue(buf, nLen, StartBit);
 			}
-			timing_info_present_flag = u(1, buf, StartBit);
+
+			int timing_info_present_flag = u(1, buf, StartBit);
 			if (timing_info_present_flag) {
-				num_units_in_tick = u(32, buf, StartBit);
-				time_scale = u(32, buf, StartBit);
+				int num_units_in_tick = u(32, buf, StartBit);
+				int time_scale = u(32, buf, StartBit);
 				fps = time_scale / (2 * num_units_in_tick);
 			}
 		}
@@ -642,6 +626,19 @@ Boolean ourRTMPClient::sendH264FramePacket(u_int8_t* data, unsigned size, double
 	return False;
 }
 
+Boolean ourRTMPClient::sendAACFramePacket(u_int8_t* data, unsigned size, double pts) {
+#ifdef DEBUG
+	envir() << *fSource << "sent packet: type=audio" << ", time=" << pts
+		<< ", size=" << size << "\n";
+	/*
+	for(unsigned i = 0; i < size; i++)
+		envir() << data[i] << " ";
+	envir() << "\n";
+	*/
+#endif
+	return True;
+}
+
 //Implementation of "StreamClientState":
 StreamClientState::StreamClientState()
 	:session(NULL), iter(NULL), subsession(NULL), streamTimerTask(NULL), checkAliveTimerTask(NULL), duration(0.0) {
@@ -663,10 +660,9 @@ DummyRTPSink* DummyRTPSink::createNew(UsageEnvironment& env, MediaSubsession& su
 }
 
 DummyRTPSink::DummyRTPSink(UsageEnvironment& env, MediaSubsession& subsession, char const* streamId)
-	: MediaSink(env), fSps(NULL), fPps(NULL), fSpsSize(0), fPpsSize(0), fReceiveBuffer(NULL), fBufferSize(388800), fSubsession(subsession),
-	  fHaveWrittenFirstFrame(True) {
+	: MediaSink(env), fSps(NULL), fPps(NULL), fSpsSize(0), fPpsSize(0), fReceiveBuffer(NULL), fBufferSize(0),
+	  fSubsession(subsession), fHaveWrittenFirstFrame(True) {
 	fStreamId = strDup(streamId);
-	fReceiveBuffer = new u_int8_t[fBufferSize];
 }
 
 DummyRTPSink::~DummyRTPSink() {
@@ -686,15 +682,17 @@ void DummyRTPSink::afterGettingFrame(unsigned frameSize, unsigned numTruncatedBy
 	StreamClientState& scs = rtspClient->scs;
 
 	gettimeofday(&scs.lastGettingFrameTime, NULL);
+	double timestamp = fSubsession.getNormalPlayTime(presentationTime) * 1000;
 
 	u_int8_t nal_unit_type = fReceiveBuffer[4] & 0x1F; //0xFF;
 
-	if (fHaveWrittenFirstFrame) {
+	if ((strcasecmp(fSubsession.mediumName(), "video") == 0)
+			&& fHaveWrittenFirstFrame) {
 		if (isSPS(nal_unit_type)) {
-			if (!sendSpsPacket(fReceiveBuffer+4, frameSize, 0))
+			if (!sendSpsPacket(fReceiveBuffer + 4, frameSize, 0))
 				goto RECONNECT;
 		} else if (isPPS(nal_unit_type)) {
-			if (!sendPpsPacket(fReceiveBuffer+4, frameSize, 0))
+			if (!sendPpsPacket(fReceiveBuffer + 4, frameSize, 0))
 				goto RECONNECT;
 			fHaveWrittenFirstFrame = False;
 		} else if (isIDR(nal_unit_type)) {
@@ -705,22 +703,22 @@ void DummyRTPSink::afterGettingFrame(unsigned frameSize, unsigned numTruncatedBy
 				goto RECONNECT;
 			fHaveWrittenFirstFrame = False;
 		}
-
 		goto NEXT_FRAME;
 	}
 
-	if (strcasecmp(fSubsession.mediumName(), "video") == 0 &&
-			strcasecmp(fSubsession.codecName(), "H264") == 0) {
-		double timestamp = fSubsession.getNormalPlayTime(presentationTime) * 1000;
-
+	if (strcasecmp(fSubsession.mediumName(), "video") == 0 ) {
 		if (isIDR(nal_unit_type) || isNonIDR(nal_unit_type)) {
+			fReceiveBuffer[0] = 0; fReceiveBuffer[1] = 0;
+			fReceiveBuffer[2] = 0; fReceiveBuffer[3] = 1;
 			if (!sendRawPacket(fReceiveBuffer, frameSize + 4, timestamp))
 				goto RECONNECT;
 		}
-		goto NEXT_FRAME;
 	} else if (strcasecmp(fSubsession.mediumName(), "audio") == 0) {
-		goto NEXT_FRAME;
+		if (!sendRawPacket(fReceiveBuffer, frameSize + 4, timestamp, False))
+			goto RECONNECT;
 	}
+	goto NEXT_FRAME;
+
 RECONNECT:
 	fHaveWrittenFirstFrame = True;
 	ourRTMPClient::createNew(envir(),rtspClient);
@@ -730,10 +728,6 @@ NEXT_FRAME:
 
 Boolean DummyRTPSink::continuePlaying() {
 	if (fSource == NULL) return False;
-
-	fReceiveBuffer[0] = 0; fReceiveBuffer[1] = 0;
-	fReceiveBuffer[2] = 0; fReceiveBuffer[3] = 1;
-
 	fSource->getNextFrame(fReceiveBuffer+4, fBufferSize-4, afterGettingFrame, this, onSourceClosure, this);
 	return True;
 }
@@ -786,6 +780,13 @@ void setupNextSubsession(RTSPClient* rtspClient) {
 
 	scs.subsession = scs.iter->next();
 	if (scs.subsession != NULL) {
+		//remove application sink
+		if (strcasecmp(scs.subsession->mediumName(), "video") != 0
+				&& strcasecmp(scs.subsession->mediumName(), "audio") != 0) {
+			setupNextSubsession(rtspClient);
+			return;
+		}
+
 		if (!scs.subsession->initiate()) {
 			env << *rtspClient << "Failed to initiate the \"" << *scs.subsession << "\" subsession: " << env.getResultMsg() << "\n";
 			setupNextSubsession(rtspClient);
@@ -801,7 +802,6 @@ void setupNextSubsession(RTSPClient* rtspClient) {
 #endif
 			// By default, we request that the server stream its data using RTP/UDP.
 			// If, instead, you want to request that the server stream via RTP-over-TCP, change the following to True:
-			//#define REQUEST_STREAMING_OVER_TCP      True
 			rtspClient->sendSetupCommand(*scs.subsession, continueAfterSETUP, False, channels[client->id()].rtspUseTcp);
 		}
 		return;
@@ -842,12 +842,17 @@ void continueAfterSETUP(RTSPClient* rtspClient, int resultCode, char* resultStri
 			break;
 		}
 
+#ifdef DEBUG
+		env << *rtspClient << "Created a data sink for the \"" << *scs.subsession << "\" subsession\n";
+#endif
+		scs.subsession->miscPtr = rtspClient;
+
 		if (strcasecmp(scs.subsession->mediumName(), "video") == 0
 				&& strcasecmp(scs.subsession->codecName(), "H264") == 0) {
-			const char* spropStr = scs.subsession->attrVal_str("sprop-parameter-sets");
+			DummyRTPSink* sink = (DummyRTPSink*) scs.subsession->sink;
+			char const* spropStr = scs.subsession->attrVal_str("sprop-parameter-sets");
 			if ( NULL != spropStr) {
 				unsigned numSPropRecords = 0;
-				DummyRTPSink* sink = (DummyRTPSink*) scs.subsession->sink;
 				SPropRecord* r = parseSPropParameterSets(spropStr, numSPropRecords);
 				for (unsigned n = 0; n < numSPropRecords; ++n) {
 					u_int8_t nal_unit_type = r[n].sPropBytes[0] & 0x1F;
@@ -857,9 +862,11 @@ void continueAfterSETUP(RTSPClient* rtspClient, int resultCode, char* resultStri
 #ifdef DEBUG
 						env << "width: " << width << " height: " << height << " fps: " << fps << "\n";
 #endif
-						if (width > 0 && height > 0) {
+						if (width >= 1280 && height >= 720 )
 							sink->setBufferSize(width * height * 1.5 / 8);
-						}
+						else
+							sink->setBufferSize(640 * 480 * 1.5 / 8);
+
 						sink->sendSpsPacket(r[n].sPropBytes, r[n].sPropLength);
 					} else if (isPPS(nal_unit_type)) {
 						sink->sendPpsPacket(r[n].sPropBytes, r[n].sPropLength);
@@ -867,16 +874,27 @@ void continueAfterSETUP(RTSPClient* rtspClient, int resultCode, char* resultStri
 				}
 				delete[] r; r = NULL;
 			}
-		}
+			sink->startPlaying(*(scs.subsession->readSource()), subsessionAfterPlaying, scs.subsession);
+		} else if(strcasecmp(scs.subsession->mediumName(), "audio") == 0) {
 #ifdef DEBUG
-		env << *rtspClient << "Created a data sink for the \"" << *scs.subsession << "\" subsession\n";
+				env << "numChannels:" << scs.subsession->numChannels() << " mode:" << scs.subsession->attrVal_str("mode") << "\n";
 #endif
-		scs.subsession->miscPtr = rtspClient;
-		scs.subsession->sink->startPlaying(*(scs.subsession->readSource()), subsessionAfterPlaying, scs.subsession);
+			DummyRTPSink* sink = (DummyRTPSink*) scs.subsession->sink;
+			if (strcasecmp(scs.subsession->codecName(), "MPEG4-GENERIC") == 0) {
+				//aac
+				sink->setBufferSize(1024);
+			} else /*if (strcasecmp(scs.subsession->codecName(), "MPA-ROBUST") == 0)*/ {
+				//mp3
+				sink->setBufferSize(1152);
+			}
+			sink->startPlaying(*(scs.subsession->readSource()), subsessionAfterPlaying, scs.subsession);
+		}
+
 
 		if (scs.subsession->rtcpInstance() != NULL) {
 			scs.subsession->rtcpInstance()->setByeHandler(subsessionByeHandler, scs.subsession);
 		}
+
 		success = True;
 	} while (0);
 
