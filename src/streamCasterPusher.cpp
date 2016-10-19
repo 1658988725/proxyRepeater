@@ -94,7 +94,16 @@ void *readFileSource(void *args) {
 	}
 
 	H264VideoStreamFramer* framer = H264VideoStreamFramer::createNew(*thatEnv, fSource, True);
+	/*
+	u_int8_t* vps;
+	u_int8_t* sps;
+	u_int8_t* pps;
+	unsigned vpsSize, spsSize, ppsSize;
+	framer->getVPSandSPSandPPS(vps, vpsSize, sps, spsSize, pps, ppsSize);
+	*thatEnv << "spsSize: " << spsSize << "\n";
+	*/
 	DummyFileSink* sink = DummyFileSink::createNew(*thatEnv);
+	sink->setBufferSize(DUMMY_SINK_RECEIVE_BUFFER_SIZE);
 	sink->startPlaying(*framer, afterPlaying, sink);
 
 	return (void*)EXIT_SUCCESS;
@@ -104,14 +113,14 @@ DummyFileSink* DummyFileSink::createNew(UsageEnvironment& env, char const* strea
 	return new DummyFileSink(env, streamId);
 }
 
-DummyFileSink::DummyFileSink(UsageEnvironment& env, char const* streamId) :
-		MediaSink(env) {
+DummyFileSink::DummyFileSink(UsageEnvironment& env, char const* streamId)
+	: MediaSink(env), fReceiveBuffer(NULL), fBufferSize(0) {
 	fStreamId = strDup(streamId);
-	fBuffer = new u_int8_t[DUMMY_SINK_RECEIVE_BUFFER_SIZE];
+	//fReceiveBuffer = new u_int8_t[DUMMY_SINK_RECEIVE_BUFFER_SIZE];
 }
 
 DummyFileSink::~DummyFileSink() {
-	delete[] fBuffer; fBuffer = NULL;
+	delete[] fReceiveBuffer; fReceiveBuffer = NULL;
 	delete[] fStreamId; fStreamId = NULL;
 }
 
@@ -119,7 +128,7 @@ Boolean DummyFileSink::continuePlaying() {
 	if (fSource == NULL)
 		return False;
 
-	fSource->getNextFrame(fBuffer, DUMMY_SINK_RECEIVE_BUFFER_SIZE, afterGettingFrame, this, onSourceClosure, this);
+	fSource->getNextFrame(fReceiveBuffer, fBufferSize, afterGettingFrame, this, onSourceClosure, this);
 	return True;
 }
 
@@ -132,13 +141,21 @@ void DummyFileSink::afterGettingFrame(void* clientData, unsigned frameSize,
 
 void DummyFileSink::afterGettingFrame(unsigned frameSize,
 		unsigned numTruncatedBytes, struct timeval presentationTime) {
+
 	unsigned dts = 0;
-	u_int8_t nut = fBuffer[4] & 0x1F;
+	u_int8_t nut = fReceiveBuffer[4] & 0x1F;
+	if (isSPS(nut)) {
+		int width, height, fps;
+		h264_decode_sps(fReceiveBuffer+4, frameSize-4, width, height, fps);
+		envir() << "width: " << width << " height: " << height << " fps: " << fps << "\n";
+		this->setBufferSize(width * height * 1.5 / 8);
+	}
+
+
 	envir() << "sent packet: type=video" << ", time=" << dts << ", size="
-	   << frameSize << ", b[4]=" << fBuffer[4] << "("
+	   << frameSize << ", b[4]=" << fReceiveBuffer[4] << "("
 	   << (isSPS(nut) ? "SPS" : (isPPS(nut) ? "PPS" : (isIDR(nut) ? "I" : (isNonIDR(nut) ? "P" : "Unknown"))))
-	   << ")\n";
-	// Then try getting the next frame:
+	   <<")" << ", bufSize:" << fBufferSize << "\n";
 	continuePlaying();
 }
 
@@ -146,7 +163,7 @@ void usage(UsageEnvironment& env) {
 	env << "Usage: " << progName << " -f <fifo_name> <[-e <url> | -h <host[:port]> [-a app] [-p password] -s <stream>]>\n";
 	env << "Options:" << "\n";
 	env << " -f: fifo pathname" << "\n";
-	env << " -e: publish endpoint url e.g: rtmp://host:port/app?nonce=&token=&/stream" << "\n";
+	env << " -e: publish endpoint url e.g: rtmp://host:port/app?token=[AUTH_KEY]/stream" << "\n";
 	env << " -h: publish endpoint host e.g: 127.0.0.1:1935" << "\n";
 	env << " -a: publish appname default: live" << "\n";
 	env << " -p: publish authentication password" << "\n";

@@ -7,6 +7,10 @@
 #include "GroupsockHelper.hh"
 #include "srs_librtmp.h"
 
+typedef unsigned int UINT;
+typedef unsigned char BYTE;
+typedef unsigned long DWORD;
+
 #define CHECK_ALIVE_TASK_TIMER_INTERVAL 5*1000*1000
 
 #define RECONNECT_WAIT_DELAY(n) if (n >= 3) { usleep(CHECK_ALIVE_TASK_TIMER_INTERVAL); n = 0; }
@@ -39,13 +43,13 @@ public:
 protected:
 	ourRTMPClient(UsageEnvironment& env, RTSPClient* rtspClient);
 	virtual ~ourRTMPClient();
-	Boolean isConnected();
 public:
 	Boolean sendH264FramePacket(u_int8_t* data, unsigned size, double pts);
 	Boolean sendAACFramePacket(u_int8_t* data, unsigned size, double pts);
 private:
 	srs_rtmp_t rtmp;
 	RTSPClient* fSource;
+	Boolean fNeedAudioTrack;
 };
 
 class ourRTSPClient: public RTSPClient {
@@ -61,6 +65,8 @@ public:
 private:
 	unsigned fChannelId;
 };
+
+int h264_decode_sps(BYTE * buf, unsigned int nLen, int &width, int &height, int &fps); //forward
 
 class DummyRTPSink: public MediaSink {
 public:
@@ -82,7 +88,6 @@ protected:
 	virtual Boolean continuePlaying();
 public:
 	void setBufferSize(unsigned size) { fBufferSize = size; delete[] fReceiveBuffer; fReceiveBuffer = new u_int8_t[size]; }
-	void resetBufferSize(unsigned width, unsigned height);
 
 	Boolean sendRawPacket(u_int8_t* data, unsigned size, double pts, Boolean isVideo = True) {
 		if (pts < 0)
@@ -97,42 +102,33 @@ public:
 	}
 
 	Boolean sendSpsPacket(u_int8_t* data, unsigned size, double pts = -1.0) {
-		if (fSps != NULL) {
-			delete[] fSps; fSps = NULL;
-		}
-		fSpsSize = size + 4;
+		delete[] fSps;
+		fSpsSize = size+4;
 		fSps = new u_int8_t[fSpsSize];
+		fSps[0] = 0; fSps[1] = 0;
+		fSps[2] = 0; fSps[3] = 1;
+		memmove(fSps+4, data, size);
 
-		fSps[0] = 0;	fSps[1] = 0;
-		fSps[2] = 0;	fSps[3] = 1;
-		memmove(fSps + 4, data, size);
-#ifdef DEBUG
-		envir() << "["<< timestamp << "] ";
-		for(unsigned i = 0; i < fSpsSize; i++) {
-			envir() <<  fSps[i] << " ";
+		int width, height, fps;
+		h264_decode_sps(data, size, width, height, fps);
+		if (width >= fWidth || height >= fHeight) {
+			fWidth = width;
+			fHeight = height;
+			fFps = fps;
+			setBufferSize(width * height * 1.5 / 8);
 		}
-		envir() << "\n";
-#endif
+		//envir() << pts <<"\th264_decode_sps: width=" << fWidth << "\theight=" << fHeight << "\tfps=" << fFps << "\tBufferSize=" << fBufferSize <<"\n";
+
 		return sendRawPacket(fSps, fSpsSize, pts);
 	}
 
 	Boolean sendPpsPacket(u_int8_t* data, unsigned size, double pts = -1.0) {
-		if (fPps != NULL) {
-			delete[] fPps; fPps = NULL;
-		}
+		delete[] fPps;
 		fPpsSize = size + 4;
 		fPps = new u_int8_t[fPpsSize];
-
-		fPps[0] = 0;	fPps[1] = 0;
-		fPps[2] = 0;	fPps[3] = 1;
-		memmove(fPps + 4, data, size);
-#ifdef DEBUG
-		envir() << "["<< timestamp << "] ";
-		for(unsigned i = 0; i < fPpsSize; i++) {
-			envir() <<  fPps[i] << " ";
-		}
-		envir() << "\n";
-#endif
+		fPps[0] = 0; fPps[1] = 0;
+		fPps[2] = 0; fPps[3] = 1;
+		memmove(fPps+4, data, size);
 		return sendRawPacket(fPps, fPpsSize, pts);
 	}
 private:
@@ -145,8 +141,9 @@ private:
 	char* fStreamId;
 	MediaSubsession& fSubsession;
 	Boolean fHaveWrittenFirstFrame;
-	unsigned fWidth;
-	unsigned fHeight;
+	int fWidth;
+	int fHeight;
+	int fFps;
 };
 
 class DummyFileSink: public MediaSink {
@@ -176,10 +173,6 @@ private:
 	char* fStreamId;
 };
 #endif /* RTMPPUSHER_HH_ */
-
-typedef unsigned int UINT;
-typedef unsigned char BYTE;
-typedef unsigned long DWORD;
 
 UINT Ue(BYTE *pBuff, UINT nLen, UINT &nStartBit) {
 	UINT nZeroNum = 0;
@@ -240,13 +233,13 @@ void de_emulation_prevention(BYTE* buf, unsigned int* buf_size) {
 	}
 }
 
-int h264_decode_sps(BYTE * buf, unsigned int nLen, unsigned &width, unsigned &height, unsigned &fps) {
+int h264_decode_sps(BYTE * buf, unsigned int nLen, int &width, int &height, int &fps) {
 	UINT StartBit = 0;
-	unsigned chroma_format_idc = 0;
-	unsigned frame_crop_left_offset;
-	unsigned frame_crop_right_offset;
-	unsigned frame_crop_top_offset;
-	unsigned frame_crop_bottom_offset;
+	int chroma_format_idc = 0;
+	int frame_crop_left_offset;
+	int frame_crop_right_offset;
+	int frame_crop_top_offset;
+	int frame_crop_bottom_offset;
 	fps = 0;
 	de_emulation_prevention(buf, &nLen);
 
