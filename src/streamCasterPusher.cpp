@@ -1,19 +1,35 @@
 #include <pthread.h>
+
 #include "rtmpPusher.hh"
-#include "cJSON.h"
 #include "ourMD5.hh"
 
+//forward
 void afterPlaying(void* clientData);
 void *readFileSource(void *args);
+void sendFramePacket(void* clientData);
 void usage(UsageEnvironment& env);
+
+#define DEFAULT_FPS 25
+#define DEBUG
 
 UsageEnvironment* thatEnv;
 char const* progName = NULL;
+static unsigned rtmpReconnectCount = 0;
 
-#define DUMMY_SINK_RECEIVE_BUFFER_SIZE 388800
+typedef struct {
+	char const* inputFileName;
+	char const* rtmpURL;
+	ourRTMPClient* rtmpClient;
+} args_t;
+
+args_t args;
+struct timeval timeNow;
+
+UsageEnvironment& operator << (UsageEnvironment& env, const ourRTMPClient& rtmpClient) {
+    return env << "[URL:\"" << rtmpClient.url() << "\"]: ";
+}
 
 int main(int argc, char** argv) {
-	//OutPacketBuffer::maxSize = DUMMY_SINK_RECEIVE_BUFFER_SIZE;
 	TaskScheduler* scheduler = BasicTaskScheduler::createNew();
 	thatEnv = BasicUsageEnvironment::createNew(*scheduler);
 
@@ -25,17 +41,16 @@ int main(int argc, char** argv) {
 	}
 
 	int opt;
-	char rtmpUrl[120] = { '\0' };
-	char const* inputFileName;
-	char* host;
-	char* app;
-	char* pwd;
-	char* stream;
+	char rtmpUrl[120] = {0}, token[66] = {0}, md5[33] = {0};
+	long nonce = 0L;
+	char const* host = "127.0.0.1:1935";
+	char const* app = "live";
+	char const* stream = NULL;
 
 	while ((opt = getopt(argc, argv, "f:e:h:a:p:s:")) != -1) {
 		switch (opt) {
 			case 'f':
-				inputFileName = optarg;
+				args.inputFileName = optarg;
 				break;
 			case 'e':
 				sprintf(rtmpUrl, "%s", optarg);
@@ -48,9 +63,12 @@ int main(int argc, char** argv) {
 					host = optarg;
 				else if (opt == 'a')
 					app = optarg;
-				else if (opt == 'p')
-					pwd = optarg;
-				else if (opt == 's')
+				else if (opt == 'p') {
+					nonce = our_random();
+					sprintf(token, "%ld%s%s", nonce, optarg, "-1");
+					our_MD5Data((unsigned char*)token, strlen(token), md5);
+					sprintf(token, "?token=%s%ld", md5, nonce);
+				} else if (opt == 's')
 					stream = optarg;
 				break;
 			default:
@@ -60,17 +78,18 @@ int main(int argc, char** argv) {
 		}
 	}
 
-	if(strlen(rtmpUrl) == 0)
-		sprintf(rtmpUrl, "rtmp://%s/%s?%s/%s", host, app, pwd, stream);
+	if(strlen(rtmpUrl) == 0) {
+		sprintf(rtmpUrl, "rtmp://%s/%s%s/%s", host, app, token, stream);
+	}
 
-	//*thatEnv << rtmpUrl << "\n";
+	args.rtmpURL = strDup(rtmpUrl);
 
 	pthread_t cthread;
 	pthread_attr_t attributes;
 	//void *cthread_return;
 	pthread_attr_init(&attributes);
 	pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED);
-	pthread_create(&cthread, NULL, readFileSource, (void*)inputFileName);
+	pthread_create(&cthread, NULL, readFileSource, (void*)(&args));
 
 	if (pthread_join(cthread, NULL) != 0) //pthread_join(cthread, &cthread_return)
 		exit(1);
@@ -83,51 +102,69 @@ void afterPlaying(void* clientData){
 	DummyFileSink* sink = (DummyFileSink*)clientData;
 	sink->stopPlaying();
 	Medium::close(sink->source());
+	Medium::close(args.rtmpClient);
+	//play
+	readFileSource((void*)&args);
 }
 
 void *readFileSource(void *args) {
-	char const* inputFileName = (char const*)args;
-	FramedSource* fSource = ByteStreamFileSource::createNew(*thatEnv, inputFileName);
+	if (args == NULL)
+		return (void*) EXIT_FAILURE;
+
+	args_t* params = (args_t*)args;
+	FramedSource* fSource = ByteStreamFileSource::createNew(*thatEnv, params->inputFileName);
 	if (fSource == NULL) {
-		*thatEnv << "Unable to open file \"" << inputFileName << "\" as a byte-stream file source\n";
-		exit(1);
+		*thatEnv << "ERROR:\tUnable to open file \"" << params->inputFileName << "\" as a byte-stream file source\n";
+		return (void*) EXIT_FAILURE;
+	}
+
+	params->rtmpClient = ourRTMPClient::createNew(*thatEnv, params->rtmpURL);
+	if(params->rtmpClient == NULL) {
+		*thatEnv << "ERROR:\tPublish the failed. endpoint:\"" << params->rtmpURL << "\n";
+		return (void*) EXIT_FAILURE;
 	}
 
 	H264VideoStreamFramer* framer = H264VideoStreamFramer::createNew(*thatEnv, fSource, True);
-	/*
-	u_int8_t* vps;
-	u_int8_t* sps;
-	u_int8_t* pps;
-	unsigned vpsSize, spsSize, ppsSize;
-	framer->getVPSandSPSandPPS(vps, vpsSize, sps, spsSize, pps, ppsSize);
-	*thatEnv << "spsSize: " << spsSize << "\n";
-	*/
-	DummyFileSink* sink = DummyFileSink::createNew(*thatEnv);
-	sink->setBufferSize(DUMMY_SINK_RECEIVE_BUFFER_SIZE);
+	DummyFileSink* sink = DummyFileSink::createNew(*thatEnv, params->rtmpClient);
+	sink->setBufferSize(4096);
 	sink->startPlaying(*framer, afterPlaying, sink);
 
 	return (void*)EXIT_SUCCESS;
 }
 
-DummyFileSink* DummyFileSink::createNew(UsageEnvironment& env, char const* streamId) {
-	return new DummyFileSink(env, streamId);
+void sendFramePacket(void* clientData) {
+	DummyFileSink* sink = (DummyFileSink*)clientData;
+	u_int8_t nut = sink->fData()[4] & 0x1F;
+
+	if (isSPS(nut) || isPPS(nut) || isIDR(nut) || isNonIDR(nut)) {
+		gettimeofday(&timeNow, NULL);
+		double pts = (double)(timeNow.tv_sec * 1000.0 + timeNow.tv_usec/1000.0) - sink->fPtsOffset;
+		if(!sink->fClient->sendH264FramePacket(sink->fData(), sink->fSize, pts));
+	}
+
+	sink->continuePlaying();
 }
 
-DummyFileSink::DummyFileSink(UsageEnvironment& env, char const* streamId)
-	: MediaSink(env), fReceiveBuffer(NULL), fBufferSize(0) {
+//Implementation of "DummyFileSink":
+DummyFileSink* DummyFileSink::createNew(UsageEnvironment& env, ourRTMPClient* rtmpClient, char const* streamId) {
+	return new DummyFileSink(env, rtmpClient, streamId);
+}
+
+DummyFileSink::DummyFileSink(UsageEnvironment& env, ourRTMPClient* rtmpClient, char const* streamId)
+	: MediaSink(env), fClient(rtmpClient), fSize(0), fReceiveBuffer(NULL), fBufferSize(0), fPtsOffset(0.0) {
 	fStreamId = strDup(streamId);
-	//fReceiveBuffer = new u_int8_t[DUMMY_SINK_RECEIVE_BUFFER_SIZE];
+
+	gettimeofday(&timeNow, NULL);
+	fPtsOffset = (double)(timeNow.tv_sec * 1000.0 + timeNow.tv_usec/1000.0);
 }
 
 DummyFileSink::~DummyFileSink() {
-	delete[] fReceiveBuffer; fReceiveBuffer = NULL;
-	delete[] fStreamId; fStreamId = NULL;
+	delete[] fReceiveBuffer;
+	delete[] fStreamId;
 }
 
 Boolean DummyFileSink::continuePlaying() {
-	if (fSource == NULL)
-		return False;
-
+	if (fSource == NULL) return False;
 	fSource->getNextFrame(fReceiveBuffer, fBufferSize, afterGettingFrame, this, onSourceClosure, this);
 	return True;
 }
@@ -141,22 +178,105 @@ void DummyFileSink::afterGettingFrame(void* clientData, unsigned frameSize,
 
 void DummyFileSink::afterGettingFrame(unsigned frameSize,
 		unsigned numTruncatedBytes, struct timeval presentationTime) {
-
-	unsigned dts = 0;
+	fSize = frameSize;
 	u_int8_t nut = fReceiveBuffer[4] & 0x1F;
+
 	if (isSPS(nut)) {
 		int width, height, fps;
-		h264_decode_sps(fReceiveBuffer+4, frameSize-4, width, height, fps);
+		unsigned spsSize = frameSize;
+		u_int8_t* sps = new u_int8_t[spsSize];
+		memmove(sps, fReceiveBuffer, spsSize);
+
+		h264_decode_sps(sps+4, spsSize-4, width, height, fps);
 		envir() << "width: " << width << " height: " << height << " fps: " << fps << "\n";
-		this->setBufferSize(width * height * 1.5 / 8);
+		setBufferSize(width * height * 1.5 / 8);
+
+		memmove(fReceiveBuffer, sps, spsSize);
+		delete[] sps;
 	}
 
+	unsigned uSecsToDelay = (isSPS(nut) || isPPS(nut)) ? 0 : (1000 / DEFAULT_FPS) * 1000;
+	envir().taskScheduler().scheduleDelayedTask(uSecsToDelay, (TaskFunc*)sendFramePacket, this);
+}
 
-	envir() << "sent packet: type=video" << ", time=" << dts << ", size="
-	   << frameSize << ", b[4]=" << fReceiveBuffer[4] << "("
-	   << (isSPS(nut) ? "SPS" : (isPPS(nut) ? "PPS" : (isIDR(nut) ? "I" : (isNonIDR(nut) ? "P" : "Unknown"))))
-	   <<")" << ", bufSize:" << fBufferSize << "\n";
-	continuePlaying();
+//Implementation of "ourRTMPClient":
+ourRTMPClient* ourRTMPClient::createNew(UsageEnvironment& env, char const* rtmpUrl, Boolean needAudioTrack) {
+	ourRTMPClient* instance = new ourRTMPClient(env, rtmpUrl, needAudioTrack);
+	return instance->rtmp != NULL ? instance : NULL;
+}
+
+ourRTMPClient::ourRTMPClient(UsageEnvironment& env, char const* rtmpUrl, Boolean needAudioTrack)
+	: Medium(env), rtmp(NULL), fSource(NULL), fNeedAudioTrack(needAudioTrack), fUrl(rtmpUrl) {
+	do {
+		rtmp = srs_rtmp_create(rtmpUrl);
+		if (srs_rtmp_handshake(rtmp) != 0) {
+			envir() << *this << "simple handshake failed." << "\n";
+			break;
+		}
+#ifdef DEBUG
+		envir() << *this << "simple handshake success" << "\n";
+#endif
+		if (srs_rtmp_connect_app(rtmp) != 0) {
+			envir() << *this << "connect vhost/app failed." << "\n";
+			break;
+		}
+#ifdef DEBUG
+		envir() << *this << "connect vhost/app success" << "\n";
+#endif
+
+		int ret = srs_rtmp_publish_stream(rtmp);
+		if (ret != 0) {
+			envir() << *this << "publish stream failed.(ret=" << ret << ")\n";
+			break;
+		}
+		envir() << *this << "publish stream success" << "\n";
+		rtmpReconnectCount = 0;
+		return;
+	} while (0);
+
+	Medium::close(this);
+}
+
+ourRTMPClient::~ourRTMPClient() {
+#ifdef DEBUG
+	envir() << *this << "Cleanup when unpublish. rtmpClient disconnect peer" << "\n";
+#endif
+	srs_rtmp_destroy(rtmp);
+	rtmp = NULL;
+	//RECONNECT_WAIT_DELAY(++rtmpReconnectCount);
+	//ourRTMPClient::createNew(envir(), fUrl);
+}
+
+Boolean ourRTMPClient::sendH264FramePacket(u_int8_t* data, unsigned size, double pts) {
+	do {
+		if (NULL != data && size > 4) {
+#ifdef DEBUG
+			u_int8_t nut = data[4] & 0x1F;
+			envir() << *this << "\n\tsent packet: type=video" << ", time=" << pts
+			<< ", size=" << size << ", b[4]="
+			<< (unsigned char*) data[4] << "("
+			<< (isSPS(nut) ? "SPS" : (isPPS(nut) ? "PPS" : (isIDR(nut) ? "I" : (isNonIDR(nut) ? "P" : "Unknown"))))
+			<< ")\n";
+#endif
+			int ret = srs_h264_write_raw_frames(rtmp, (char*) data, size, pts, pts);
+			if (ret != 0) {
+				if (srs_h264_is_dvbsp_error(ret)) {
+					envir() << *this << "ignore drop video error, code=" << ret << "\n";
+				} else if (srs_h264_is_duplicated_sps_error(ret)) {
+					envir() << *this << "ignore duplicated sps, code=" << ret << "\n";
+				} else if (srs_h264_is_duplicated_pps_error(ret)) {
+					envir() << *this << "ignore duplicated pps, code=" << ret << "\n";
+				} else {
+					envir() << *this << "send h264 raw data failed. code=" << ret << "\n";
+					break;
+				}
+			}
+		}
+		return True;
+	} while (0);
+
+	Medium::close(this);
+	return False;
 }
 
 void usage(UsageEnvironment& env) {

@@ -40,16 +40,21 @@ class ourRTMPClient: public Medium {
 public:
 	static ourRTMPClient* createNew(UsageEnvironment& env,
 			RTSPClient* rtspClient);
+	static ourRTMPClient* createNew(UsageEnvironment& env,
+				char const* rtmpUrl, Boolean needAudioTrack = False);
 protected:
 	ourRTMPClient(UsageEnvironment& env, RTSPClient* rtspClient);
+	ourRTMPClient(UsageEnvironment& env, char const* rtmpUrl, Boolean needAudioTrack);
 	virtual ~ourRTMPClient();
 public:
 	Boolean sendH264FramePacket(u_int8_t* data, unsigned size, double pts);
 	Boolean sendAACFramePacket(u_int8_t* data, unsigned size, double pts);
+	char* url() const { return strDup(fUrl); }
 private:
 	srs_rtmp_t rtmp;
 	RTSPClient* fSource;
 	Boolean fNeedAudioTrack;
+	char const* fUrl;
 };
 
 class ourRTSPClient: public RTSPClient {
@@ -148,15 +153,15 @@ private:
 
 class DummyFileSink: public MediaSink {
 public:
-	static DummyFileSink* createNew(UsageEnvironment& env, char const* streamId = NULL);
+	static DummyFileSink* createNew(UsageEnvironment& env, ourRTMPClient* rtmpClient, char const* streamId = NULL);
+
+	// redefined virtual functions:
+	virtual Boolean continuePlaying();
 protected:
-	DummyFileSink(UsageEnvironment& env, char const* streamId);
+	DummyFileSink(UsageEnvironment& env, ourRTMPClient* rtmpClient, char const* streamId);
 	// called only by createNew()
 	virtual ~DummyFileSink();
 protected:
-	// redefined virtual functions:
-	virtual Boolean continuePlaying();
-
 	static void afterGettingFrame(void* clientData, unsigned frameSize,
 			unsigned numTruncatedBytes, struct timeval presentationTime,
 			unsigned durationInMicroseconds);
@@ -164,9 +169,12 @@ protected:
 	virtual void afterGettingFrame(unsigned frameSize,
 			unsigned numTruncatedBytes, struct timeval presentationTime);
 public:
-	void setBufferSize(unsigned size) { fBufferSize = size; \
-										delete[] fReceiveBuffer; \
-										fReceiveBuffer = new u_int8_t[size]; }
+	void setBufferSize(unsigned size) { fBufferSize = size; delete[] fReceiveBuffer; fReceiveBuffer = new u_int8_t[size]; }
+public:
+	ourRTMPClient* fClient;
+	u_int8_t* fData () const { return fReceiveBuffer; }
+	unsigned fSize;
+	double fPtsOffset;
 private:
 	u_int8_t* fReceiveBuffer;
 	unsigned fBufferSize;

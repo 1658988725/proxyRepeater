@@ -22,8 +22,6 @@ Boolean runDaemonMode = False;
 static unsigned rtspReconnectCount = 0, rtmpReconnectCount = 0;
 char const* progName = NULL;
 
-//#define DEBUG
-
 UsageEnvironment& operator << (UsageEnvironment& env, const RTSPClient& rtspClient) {
     return env << "[URL:\"" << rtspClient.url() << "\"]: ";
 }
@@ -364,9 +362,9 @@ ourRTMPClient::ourRTMPClient(UsageEnvironment& env, RTSPClient* rtspClient)
 	: Medium(env), rtmp(NULL), fSource(rtspClient) {
 	unsigned id = ((ourRTSPClient*)fSource)->id();
 	fNeedAudioTrack = channels[id].audioTrack;
-
+	fUrl = channels[id].rtmpURL;
 	do {
-		rtmp = srs_rtmp_create(channels[id].rtmpURL);
+		rtmp = srs_rtmp_create(fUrl);
 		if (srs_rtmp_handshake(rtmp) != 0) {
 			envir() << *fSource << "simple handshake failed." << "\n";
 			break;
@@ -682,14 +680,18 @@ void continueAfterSETUP(RTSPClient* rtspClient, int resultCode, char* resultStri
 #ifdef DEBUG
 			env << "numChannels:" << scs.subsession->numChannels() << " mode:" << scs.subsession->attrVal_str("mode") << "\n";
 #endif
-			if (strcasecmp(scs.subsession->codecName(), "MPEG4-GENERIC") == 0) {
+			if (strcasecmp(scs.subsession->codecName(), "MPEG4-GENERIC") == 0
+					&& strcasecmp(scs.subsession->attrVal_str("mode"), "AAC-hbr") == 0) {
 				//aac
 				sink->setBufferSize(1024);
-			} else /*if (strcasecmp(scs.subsession->codecName(), "MPA-ROBUST") == 0)*/ {
+			} else /*if (strcasecmp(scs.subsession->codecName(), "MPA") == 0 ||
+			 strcasecmp(scs.subsession->codecName(), "MPA-ROBUST") == 0 ||
+			 strcasecmp(scs.subsession->codecName(), "MP4A-LATM") == 0)*/{
 				//mp3
 				sink->setBufferSize(1152);
 			}
 		}
+
 		sink->startPlaying(*(scs.subsession->readSource()), subsessionAfterPlaying, scs.subsession);
 
 		if (scs.subsession->rtcpInstance() != NULL) {
