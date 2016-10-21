@@ -9,15 +9,12 @@ void *readFileSource(void *args);
 void sendFramePacket(void* clientData);
 void usage(UsageEnvironment& env);
 
-#define DEFAULT_FPS 25
-//#define DEBUG
-
 UsageEnvironment* thatEnv;
 char const* progName = NULL;
-static unsigned rtmpReconnectCount = 0;
 
 typedef struct {
 	char const* inputFileName;
+	unsigned videoFps;
 	char const* rtmpURL;
 	ourRTMPClient* rtmpClient;
 } args_t;
@@ -48,10 +45,15 @@ int main(int argc, char** argv) {
 	char const* app = "live";
 	char const* stream = NULL;
 
-	while ((opt = getopt(argc, argv, "f:e:h:a:p:s:")) != -1) {
+	args.videoFps = 0;
+
+	while ((opt = getopt(argc, argv, "f:r:e:h:a:p:s:")) != -1) {
 		switch (opt) {
 			case 'f':
 				args.inputFileName = optarg;
+				break;
+			case 'r':
+				args.videoFps = atoi(optarg);
 				break;
 			case 'e':
 				sprintf(rtmpUrl, "%s", optarg);
@@ -127,7 +129,9 @@ void *readFileSource(void *args) {
 
 	H264VideoStreamFramer* framer = H264VideoStreamFramer::createNew(*thatEnv, fSource, True);
 	DummyFileSink* sink = DummyFileSink::createNew(*thatEnv, params->rtmpClient);
-	sink->setBufferSize(4096);
+	if (params->videoFps > 0) {
+		sink->setVideoFps(params->videoFps);
+	}
 	sink->startPlaying(*framer, afterPlaying, sink);
 
 	return (void*)EXIT_SUCCESS;
@@ -137,10 +141,8 @@ void sendFramePacket(void* clientData) {
 	DummyFileSink* sink = (DummyFileSink*)clientData;
 	u_int8_t nut = sink->fData()[4] & 0x1F;
 
-	if(isIDR(nut) || isNonIDR(nut)) {
-		if(!sink->fClient->sendH264FramePacket(sink->fData(), sink->fSize, sink->fPts)) {
-
-		}
+	if ((isIDR(nut) || isNonIDR(nut)) &&
+			!sink->fClient->sendH264FramePacket(sink->fData(), sink->fSize, sink->fPts)) {
 	}
 
 	sink->continuePlaying();
@@ -153,8 +155,9 @@ DummyFileSink* DummyFileSink::createNew(UsageEnvironment& env, ourRTMPClient* rt
 
 DummyFileSink::DummyFileSink(UsageEnvironment& env, ourRTMPClient* rtmpClient, char const* streamId)
 	: MediaSink(env), fClient(rtmpClient), fSize(0), fPts(0.0), fSps(NULL), fPps(NULL), fSpsSize(0), fPpsSize(0),
-	  fReceiveBuffer(NULL), fBufferSize(0), fPtsOffset(0.0), fHaveWrittenFirstFrame(True) {
+	  fReceiveBuffer(NULL), fHaveWrittenFirstFrame(True), fWidth(640), fHeight(480), fFps(25) {
 	fStreamId = strDup(streamId);
+	setBufferSize(fWidth * fHeight * 1.5 /8);
 	gettimeofday(&timeNow, NULL);
 	fPtsOffset = (double)(timeNow.tv_sec * 1000.0 + timeNow.tv_usec/1000.0);
 }
@@ -184,14 +187,14 @@ void DummyFileSink::afterGettingFrame(unsigned frameSize,
 
 	if(fHaveWrittenFirstFrame) {
 		if (isSPS(nut)) {
-			int width, height, fps;
 			fSpsSize = frameSize;
 			fSps = new u_int8_t[fSpsSize];
 			memmove(fSps, fReceiveBuffer, fSpsSize);
 
-			h264_decode_sps(fSps+4, fSpsSize-4, width, height, fps);
-			envir() << *fClient << "H264 width:" << width << "\theight:" << height << "\tfps:" << DEFAULT_FPS << "\n";
-			setBufferSize(width * height * 1.5 / 8);
+			int fps = 0;
+			h264_decode_sps(fSps+4, fSpsSize-4, fWidth, fHeight, fps);
+			setBufferSize(fWidth * fHeight * 1.5 / 8);
+			envir() << *fClient << "H264 width:" << fWidth << "\theight:" << fHeight << "\tfps:" << fFps << "\n";
 
 			fClient->sendH264FramePacket(fSps, fSpsSize, 0);
 		} else if (isPPS(nut)) {
@@ -208,7 +211,7 @@ void DummyFileSink::afterGettingFrame(unsigned frameSize,
 	} else {
 		gettimeofday(&timeNow, NULL);
 		fPts = (double)(timeNow.tv_sec * 1000.0 + timeNow.tv_usec/1000.0) - fPtsOffset;
-		envir().taskScheduler().scheduleDelayedTask((1000 / DEFAULT_FPS * 1000), (TaskFunc*)sendFramePacket, this);
+		envir().taskScheduler().scheduleDelayedTask((1000 / fFps * 1000), (TaskFunc*)sendFramePacket, this);
 	}
 }
 
@@ -243,7 +246,6 @@ ourRTMPClient::ourRTMPClient(UsageEnvironment& env, char const* rtmpUrl, Boolean
 			break;
 		}
 		envir() << *this << "publish stream success" << "\n";
-		rtmpReconnectCount = 0;
 		return;
 	} while (0);
 
@@ -256,8 +258,6 @@ ourRTMPClient::~ourRTMPClient() {
 #endif
 	srs_rtmp_destroy(rtmp);
 	rtmp = NULL;
-	//RECONNECT_WAIT_DELAY(++rtmpReconnectCount);
-	//ourRTMPClient::createNew(envir(), fUrl);
 }
 
 Boolean ourRTMPClient::sendH264FramePacket(u_int8_t* data, unsigned size, double pts) {
@@ -293,12 +293,13 @@ Boolean ourRTMPClient::sendH264FramePacket(u_int8_t* data, unsigned size, double
 }
 
 void usage(UsageEnvironment& env) {
-	env << "Usage: " << progName << " -f <fifo_name> <[-e <url> | -h <host[:port]> [-a app] [-p password] -s <stream>]>\n";
+	env << "Usage: " << progName << " -f <fifo_name> [-r <frame rate>] <[-e <url> | -h <host[:port]> [-a app] [-p password] -s <stream>]>\n";
 	env << "Options:" << "\n";
 	env << " -f: fifo pathname" << "\n";
-	env << " -e: publish endpoint url e.g: rtmp://host:port/app?token=[AUTH_KEY]/stream" << "\n";
-	env << " -h: publish endpoint host e.g: 127.0.0.1:1935" << "\n";
-	env << " -a: publish appname default: live" << "\n";
-	env << " -p: publish authentication password" << "\n";
-	env << " -s: publish streamname" << "\n";
+	env << " -r: set frame rate default: 25" << "\n";
+	env << " -e: publish endpoint url e.g: rtmp://host:port/app?token=[AUTH_KEY]/stream1" << "\n";
+	env << " -h: set endpoint host e.g: 127.0.0.1:1935" << "\n";
+	env << " -a: set endpoint appname default: live" << "\n";
+	env << " -p: set endpoint password" << "\n";
+	env << " -s: set endpoint streamname" << "\n";
 }

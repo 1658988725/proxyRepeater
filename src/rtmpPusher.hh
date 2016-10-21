@@ -168,9 +168,10 @@ protected:
 
 	virtual void afterGettingFrame(unsigned frameSize,
 			unsigned numTruncatedBytes, struct timeval presentationTime);
-public:
+
 	void setBufferSize(unsigned size) { fBufferSize = size; delete[] fReceiveBuffer; fReceiveBuffer = new u_int8_t[size]; }
 public:
+	void setVideoFps(unsigned fps) { fFps = fps; }
 	ourRTMPClient* fClient;
 	u_int8_t* fData () const { return fReceiveBuffer; }
 	unsigned fSize;
@@ -185,6 +186,9 @@ private:
 	unsigned fBufferSize;
 	char* fStreamId;
 	Boolean fHaveWrittenFirstFrame;
+	int fWidth;
+	int fHeight;
+	int fFps;
 };
 #endif /* RTMPPUSHER_HH_ */
 

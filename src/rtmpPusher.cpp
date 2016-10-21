@@ -475,7 +475,7 @@ DummyRTPSink* DummyRTPSink::createNew(UsageEnvironment& env, MediaSubsession& su
 
 DummyRTPSink::DummyRTPSink(UsageEnvironment& env, MediaSubsession& subsession, char const* streamId)
 	: MediaSink(env), fSps(NULL), fPps(NULL), fSpsSize(0), fPpsSize(0), fSubsession(subsession),
-	  fHaveWrittenFirstFrame(True), fWidth(640), fHeight(360), fFps(0) {
+	  fHaveWrittenFirstFrame(True), fWidth(640), fHeight(480), fFps(0) {
 	fStreamId = strDup(streamId);
 	fBufferSize = fWidth * fHeight * 1.5 / 8;
 	fReceiveBuffer = new u_int8_t[fBufferSize];
