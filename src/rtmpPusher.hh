@@ -174,11 +174,17 @@ public:
 	ourRTMPClient* fClient;
 	u_int8_t* fData () const { return fReceiveBuffer; }
 	unsigned fSize;
-	double fPtsOffset;
+	double fPts;
 private:
+	double fPtsOffset;
+	u_int8_t* fSps;
+	u_int8_t* fPps;
+	unsigned fSpsSize;
+	unsigned fPpsSize;
 	u_int8_t* fReceiveBuffer;
 	unsigned fBufferSize;
 	char* fStreamId;
+	Boolean fHaveWrittenFirstFrame;
 };
 #endif /* RTMPPUSHER_HH_ */
 

@@ -10,7 +10,7 @@ void sendFramePacket(void* clientData);
 void usage(UsageEnvironment& env);
 
 #define DEFAULT_FPS 25
-#define DEBUG
+//#define DEBUG
 
 UsageEnvironment* thatEnv;
 char const* progName = NULL;
@@ -23,6 +23,7 @@ typedef struct {
 } args_t;
 
 args_t args;
+
 struct timeval timeNow;
 
 UsageEnvironment& operator << (UsageEnvironment& env, const ourRTMPClient& rtmpClient) {
@@ -136,10 +137,10 @@ void sendFramePacket(void* clientData) {
 	DummyFileSink* sink = (DummyFileSink*)clientData;
 	u_int8_t nut = sink->fData()[4] & 0x1F;
 
-	if (isSPS(nut) || isPPS(nut) || isIDR(nut) || isNonIDR(nut)) {
-		gettimeofday(&timeNow, NULL);
-		double pts = (double)(timeNow.tv_sec * 1000.0 + timeNow.tv_usec/1000.0) - sink->fPtsOffset;
-		if(!sink->fClient->sendH264FramePacket(sink->fData(), sink->fSize, pts));
+	if(isIDR(nut) || isNonIDR(nut)) {
+		if(!sink->fClient->sendH264FramePacket(sink->fData(), sink->fSize, sink->fPts)) {
+
+		}
 	}
 
 	sink->continuePlaying();
@@ -151,9 +152,9 @@ DummyFileSink* DummyFileSink::createNew(UsageEnvironment& env, ourRTMPClient* rt
 }
 
 DummyFileSink::DummyFileSink(UsageEnvironment& env, ourRTMPClient* rtmpClient, char const* streamId)
-	: MediaSink(env), fClient(rtmpClient), fSize(0), fReceiveBuffer(NULL), fBufferSize(0), fPtsOffset(0.0) {
+	: MediaSink(env), fClient(rtmpClient), fSize(0), fPts(0.0), fSps(NULL), fPps(NULL), fSpsSize(0), fPpsSize(0),
+	  fReceiveBuffer(NULL), fBufferSize(0), fPtsOffset(0.0), fHaveWrittenFirstFrame(True) {
 	fStreamId = strDup(streamId);
-
 	gettimeofday(&timeNow, NULL);
 	fPtsOffset = (double)(timeNow.tv_sec * 1000.0 + timeNow.tv_usec/1000.0);
 }
@@ -181,22 +182,34 @@ void DummyFileSink::afterGettingFrame(unsigned frameSize,
 	fSize = frameSize;
 	u_int8_t nut = fReceiveBuffer[4] & 0x1F;
 
-	if (isSPS(nut)) {
-		int width, height, fps;
-		unsigned spsSize = frameSize;
-		u_int8_t* sps = new u_int8_t[spsSize];
-		memmove(sps, fReceiveBuffer, spsSize);
+	if(fHaveWrittenFirstFrame) {
+		if (isSPS(nut)) {
+			int width, height, fps;
+			fSpsSize = frameSize;
+			fSps = new u_int8_t[fSpsSize];
+			memmove(fSps, fReceiveBuffer, fSpsSize);
 
-		h264_decode_sps(sps+4, spsSize-4, width, height, fps);
-		envir() << "width: " << width << " height: " << height << " fps: " << fps << "\n";
-		setBufferSize(width * height * 1.5 / 8);
+			h264_decode_sps(fSps+4, fSpsSize-4, width, height, fps);
+			envir() << *fClient << "H264 width:" << width << "\theight:" << height << "\tfps:" << DEFAULT_FPS << "\n";
+			setBufferSize(width * height * 1.5 / 8);
 
-		memmove(fReceiveBuffer, sps, spsSize);
-		delete[] sps;
+			fClient->sendH264FramePacket(fSps, fSpsSize, 0);
+		} else if (isPPS(nut)) {
+			fPpsSize = frameSize;
+			fPps = new u_int8_t[fPpsSize];
+			memmove(fPps, fReceiveBuffer, fPpsSize);
+
+			fClient->sendH264FramePacket(fPps, fPpsSize, 0);
+		} else if (isIDR(nut)) {
+			fClient->sendH264FramePacket(fReceiveBuffer, frameSize, 0);
+			fHaveWrittenFirstFrame = False;
+		}
+		continuePlaying();
+	} else {
+		gettimeofday(&timeNow, NULL);
+		fPts = (double)(timeNow.tv_sec * 1000.0 + timeNow.tv_usec/1000.0) - fPtsOffset;
+		envir().taskScheduler().scheduleDelayedTask((1000 / DEFAULT_FPS * 1000), (TaskFunc*)sendFramePacket, this);
 	}
-
-	unsigned uSecsToDelay = (isSPS(nut) || isPPS(nut)) ? 0 : (1000 / DEFAULT_FPS) * 1000;
-	envir().taskScheduler().scheduleDelayedTask(uSecsToDelay, (TaskFunc*)sendFramePacket, this);
 }
 
 //Implementation of "ourRTMPClient":
