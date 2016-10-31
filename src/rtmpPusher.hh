@@ -186,10 +186,12 @@ public:
 		memmove(fPps+4, data, size);
 	}
 
-	void addADTStoPacket(u_int8_t* data, unsigned size) {
+	Boolean addADTStoPacket(u_int8_t* data, unsigned size) {
 		int profile = 2;  //AAC LC
 		int freqIdx = getSamplingFrequencyIndex(fSubsession.rtpTimestampFrequency());
 		int chanCfg = fSubsession.numChannels();
+		if (freqIdx == -1)
+			return False;
 
 		// fill in ADTS data
 		data[0] = (u_int8_t)0xFF;
@@ -199,6 +201,7 @@ public:
 		data[4] = (u_int8_t)((size&0x7FF) >> 3);
 		data[5] = (u_int8_t)(((size&7) << 5) + 0x1F);
 		data[6] = (u_int8_t)0xFC;
+		return True;
 	}
 private:
 	u_int8_t* fSps;

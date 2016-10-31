@@ -586,7 +586,8 @@ void DummySink::afterGettingFrame(unsigned frameSize, unsigned numTruncatedBytes
 				if (!srs_aac_is_adts((char*)fReceiveBuffer+4, frameSize)) {
 					memmove(fAACBuffer+7, fReceiveBuffer+4, frameSize);
 					out_size = frameSize+7;
-					addADTStoPacket(fAACBuffer, out_size);
+					if(!addADTStoPacket(fAACBuffer, out_size))
+						goto NEXT_FRAME;
 				} else {
 					memmove(fAACBuffer, fReceiveBuffer+4, frameSize);
 					out_size = frameSize;
