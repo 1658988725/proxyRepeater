@@ -3,28 +3,35 @@
 #include "rtmpPusher.hh"
 #include "ourMD5.hh"
 
+#define DEBUG
+
+typedef struct {
+	unsigned packetType;
+	DummySink* sink;
+	u_int8_t* data;
+	unsigned size;
+} send_frame_packet_t, *send_frame_packet_ptr;
+
 //forward
 void afterPlaying(void* clientData);
 void *readFileSource(void *args);
 void sendFramePacket(void* clientData);
 void usage(UsageEnvironment& env);
 
-UsageEnvironment* thatEnv;
-char const* progName = NULL;
+conn_item_params_t params;
 
-typedef struct {
-	char const* inputFileName;
-	unsigned videoFps;
-	char const* rtmpURL;
-	ourRTMPClient* rtmpClient;
-} args_t;
+send_frame_packet_t packet;
 
-args_t args;
+void sendFramePacket(void* clientData) {
+	send_frame_packet_ptr packet = (send_frame_packet_ptr)clientData;
+	if (packet->packetType == 0) {
+		u_int8_t nut = packet->data[4] & 0x1F;
+		if ((isIDR(nut) || isNonIDR(nut)) && !packet->sink->fClient->sendH264FramePacket(packet->data, packet->size)) {
+		}
+	} else {
 
-struct timeval timeNow;
-
-UsageEnvironment& operator << (UsageEnvironment& env, const ourRTMPClient& rtmpClient) {
-    return env << "[URL:\"" << rtmpClient.url() << "\"]: ";
+	}
+	packet->sink->continuePlaying();
 }
 
 int main(int argc, char** argv) {
@@ -45,15 +52,15 @@ int main(int argc, char** argv) {
 	char const* app = "live";
 	char const* stream = NULL;
 
-	args.videoFps = 0;
+	params.videoFps = 0;
 
 	while ((opt = getopt(argc, argv, "f:r:e:h:a:p:s:")) != -1) {
 		switch (opt) {
 			case 'f':
-				args.inputFileName = optarg;
+				params.srcStreamURL = optarg;
 				break;
 			case 'r':
-				args.videoFps = atoi(optarg);
+				params.videoFps = atoi(optarg);
 				break;
 			case 'e':
 				sprintf(rtmpUrl, "%s", optarg);
@@ -85,14 +92,14 @@ int main(int argc, char** argv) {
 		sprintf(rtmpUrl, "rtmp://%s/%s%s/%s", host, app, token, stream);
 	}
 
-	args.rtmpURL = strDup(rtmpUrl);
+	params.destStreamURL = strDup(rtmpUrl);
 
 	pthread_t cthread;
 	pthread_attr_t attributes;
 	//void *cthread_return;
 	pthread_attr_init(&attributes);
 	pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED);
-	pthread_create(&cthread, NULL, readFileSource, (void*)(&args));
+	pthread_create(&cthread, NULL, readFileSource, (void*)&params);
 
 	if (pthread_join(cthread, NULL) != 0) //pthread_join(cthread, &cthread_return)
 		exit(1);
@@ -102,127 +109,119 @@ int main(int argc, char** argv) {
 }
 
 void afterPlaying(void* clientData){
-	DummyFileSink* sink = (DummyFileSink*)clientData;
+	DummySink* sink = (DummySink*)clientData;
 	sink->stopPlaying();
 	Medium::close(sink->source());
-	Medium::close(args.rtmpClient);
+	Medium::close(sink->fClient);
 	//play
-	readFileSource((void*)&args);
+	readFileSource((void*)&params);
 }
 
 void *readFileSource(void *args) {
 	if (args == NULL)
 		return (void*) EXIT_FAILURE;
 
-	args_t* params = (args_t*)args;
-	FramedSource* fSource = ByteStreamFileSource::createNew(*thatEnv, params->inputFileName);
+	conn_item_params_ptr ptr = (conn_item_params_ptr)args;
+	FramedSource* fSource = ByteStreamFileSource::createNew(*thatEnv, ptr->srcStreamURL);
 	if (fSource == NULL) {
-		*thatEnv << "ERROR:\tUnable to open file \"" << params->inputFileName << "\" as a byte-stream file source\n";
+		*thatEnv << "ERROR:\tUnable to open file \"" << ptr->srcStreamURL << "\" as a byte-stream file source\n";
 		return (void*) EXIT_FAILURE;
 	}
 
-	params->rtmpClient = ourRTMPClient::createNew(*thatEnv, params->rtmpURL);
-	if(params->rtmpClient == NULL) {
-		*thatEnv << "ERROR:\tPublish the failed. endpoint:\"" << params->rtmpURL << "\n";
+	ourRTMPClient* rtmpClient = ourRTMPClient::createNew(*thatEnv, ptr->destStreamURL);
+	if(rtmpClient == NULL) {
+		*thatEnv << "ERROR:\tPublish the failed. endpoint:\"" << ptr->destStreamURL << "\n";
 		return (void*) EXIT_FAILURE;
 	}
 
 	H264VideoStreamFramer* framer = H264VideoStreamFramer::createNew(*thatEnv, fSource, True);
-	DummyFileSink* sink = DummyFileSink::createNew(*thatEnv, params->rtmpClient);
-	if (params->videoFps > 0) {
-		sink->setVideoFps(params->videoFps);
+	MediaSession* session = MediaSession::createNew(*thatEnv, "v=0\r\n");
+	if (session == NULL) {
+		*thatEnv << "ERROR:\ttUnable create MediaSession\n";
+		return (void*) EXIT_FAILURE;
 	}
+
+	MediaSubsessionIterator* iter = new MediaSubsessionIterator(*session);
+	DummySink* sink = DummySink::createNew(*thatEnv, *(iter->next()));
+	if (ptr->videoFps > 0) {
+		sink->setVideoFps(ptr->videoFps);
+	}
+
+	sink->fClient = rtmpClient;
+
 	sink->startPlaying(*framer, afterPlaying, sink);
 
 	return (void*)EXIT_SUCCESS;
 }
 
-void sendFramePacket(void* clientData) {
-	DummyFileSink* sink = (DummyFileSink*)clientData;
-	u_int8_t nut = sink->fData()[4] & 0x1F;
-
-	if ((isIDR(nut) || isNonIDR(nut)) &&
-			!sink->fClient->sendH264FramePacket(sink->fData(), sink->fSize, sink->fPts)) {
-	}
-
-	sink->continuePlaying();
-}
-
 //Implementation of "DummyFileSink":
-DummyFileSink* DummyFileSink::createNew(UsageEnvironment& env, ourRTMPClient* rtmpClient, char const* streamId) {
-	return new DummyFileSink(env, rtmpClient, streamId);
+DummySink* DummySink::createNew(UsageEnvironment& env, MediaSubsession& subsession, char const* streamId) {
+	return new DummySink(env, subsession, streamId);
 }
 
-DummyFileSink::DummyFileSink(UsageEnvironment& env, ourRTMPClient* rtmpClient, char const* streamId)
-	: MediaSink(env), fClient(rtmpClient), fSize(0), fPts(0.0), fSps(NULL), fPps(NULL), fSpsSize(0), fPpsSize(0),
-	  fReceiveBuffer(NULL), fHaveWrittenFirstFrame(True), fWidth(640), fHeight(480), fFps(25) {
+DummySink::DummySink(UsageEnvironment& env, MediaSubsession& subsession, char const* streamId)
+	: MediaSink(env), fSps(NULL), fPps(NULL), fSpsSize(0), fPpsSize(0),
+	  fReceiveBuffer(NULL), fSubsession(subsession), fWidth(640), fHeight(480), fFps(25) {
 	fStreamId = strDup(streamId);
-	setBufferSize(fWidth * fHeight * 1.5 /8);
-	gettimeofday(&timeNow, NULL);
-	fPtsOffset = (double)(timeNow.tv_sec * 1000.0 + timeNow.tv_usec/1000.0);
+	setBufferSize(fWidth * fHeight * 2 / 8);
 }
 
-DummyFileSink::~DummyFileSink() {
+DummySink::~DummySink() {
+	delete[] fSps;
+	delete[] fPps;
 	delete[] fReceiveBuffer;
 	delete[] fStreamId;
 }
 
-Boolean DummyFileSink::continuePlaying() {
+Boolean DummySink::continuePlaying() {
 	if (fSource == NULL) return False;
 	fSource->getNextFrame(fReceiveBuffer, fBufferSize, afterGettingFrame, this, onSourceClosure, this);
 	return True;
 }
 
-void DummyFileSink::afterGettingFrame(void* clientData, unsigned frameSize,
+void DummySink::afterGettingFrame(void* clientData, unsigned frameSize,
 		unsigned numTruncatedBytes, struct timeval presentationTime,
 		unsigned durationInMicroseconds) {
-	DummyFileSink* sink = (DummyFileSink*)clientData;
-	sink->afterGettingFrame(frameSize, numTruncatedBytes, presentationTime);
+	DummySink* sink = (DummySink*)clientData;
+	sink->afterGettingFrame(frameSize, numTruncatedBytes, presentationTime, durationInMicroseconds);
 }
 
-void DummyFileSink::afterGettingFrame(unsigned frameSize,
-		unsigned numTruncatedBytes, struct timeval presentationTime) {
-	fSize = frameSize;
+void DummySink::afterGettingFrame(unsigned frameSize, unsigned numTruncatedBytes,
+		struct timeval presentationTime, unsigned /*durationInMicroseconds*/) {
 	u_int8_t nut = fReceiveBuffer[4] & 0x1F;
 
-	if(fHaveWrittenFirstFrame) {
+	if(fClient->fWaitFirstFrameFlag) {
 		if (isSPS(nut)) {
-			fSpsSize = frameSize;
-			fSps = new u_int8_t[fSpsSize];
-			memmove(fSps, fReceiveBuffer, fSpsSize);
-
-			int fps = 0;
-			h264_decode_sps(fSps+4, fSpsSize-4, fWidth, fHeight, fps);
-			setBufferSize(fWidth * fHeight * 1.5 / 8);
+			parseSpsPacket(fReceiveBuffer + 4, frameSize);
+#ifdef DEBUG
 			envir() << *fClient << "H264 width:" << fWidth << "\theight:" << fHeight << "\tfps:" << fFps << "\n";
-
-			fClient->sendH264FramePacket(fSps, fSpsSize, 0);
+#endif
 		} else if (isPPS(nut)) {
-			fPpsSize = frameSize;
-			fPps = new u_int8_t[fPpsSize];
-			memmove(fPps, fReceiveBuffer, fPpsSize);
-
-			fClient->sendH264FramePacket(fPps, fPpsSize, 0);
+			parsePpsPacket(fReceiveBuffer + 4, frameSize);
 		} else if (isIDR(nut)) {
-			fClient->sendH264FramePacket(fReceiveBuffer, frameSize, 0);
-			fHaveWrittenFirstFrame = False;
+			if (!fClient->sendH264FramePacket(fSps, fSpsSize, 0)
+				|| !fClient->sendH264FramePacket(fPps, fPpsSize, 0)
+				|| !fClient->sendH264FramePacket(fReceiveBuffer, frameSize+4, 0)) return;
+			fClient->fWaitFirstFrameFlag = False;
 		}
 		continuePlaying();
 	} else {
-		gettimeofday(&timeNow, NULL);
-		fPts = (double)(timeNow.tv_sec * 1000.0 + timeNow.tv_usec/1000.0) - fPtsOffset;
-		envir().taskScheduler().scheduleDelayedTask((1000 / fFps * 1000), (TaskFunc*)sendFramePacket, this);
+		packet.packetType = 0;
+		packet.sink = this;
+		packet.data = fReceiveBuffer;
+		packet.size = frameSize;
+		envir().taskScheduler().scheduleDelayedTask(1000 / fFps * 1000, (TaskFunc*)sendFramePacket, &packet);
 	}
 }
 
 //Implementation of "ourRTMPClient":
-ourRTMPClient* ourRTMPClient::createNew(UsageEnvironment& env, char const* rtmpUrl, Boolean needAudioTrack) {
-	ourRTMPClient* instance = new ourRTMPClient(env, rtmpUrl, needAudioTrack);
+ourRTMPClient* ourRTMPClient::createNew(UsageEnvironment& env, char const* rtmpUrl) {
+	ourRTMPClient* instance = new ourRTMPClient(env, rtmpUrl);
 	return instance->rtmp != NULL ? instance : NULL;
 }
 
-ourRTMPClient::ourRTMPClient(UsageEnvironment& env, char const* rtmpUrl, Boolean needAudioTrack)
-	: Medium(env), rtmp(NULL), fSource(NULL), fNeedAudioTrack(needAudioTrack), fUrl(rtmpUrl) {
+ourRTMPClient::ourRTMPClient(UsageEnvironment& env, char const* rtmpUrl)
+	: Medium(env), fWaitFirstFrameFlag(True), rtmp(NULL), fSource(NULL), fPtsOffset(0), fUrl(rtmpUrl) {
 	do {
 		rtmp = srs_rtmp_create(rtmpUrl);
 		if (srs_rtmp_handshake(rtmp) != 0) {
@@ -246,6 +245,10 @@ ourRTMPClient::ourRTMPClient(UsageEnvironment& env, char const* rtmpUrl, Boolean
 			break;
 		}
 		envir() << *this << "publish stream success" << "\n";
+
+		gettimeofday(&timeNow, NULL);
+		fPtsOffset = timeNow.tv_sec * 1000000 + timeNow.tv_usec;
+
 		return;
 	} while (0);
 
@@ -263,9 +266,13 @@ ourRTMPClient::~ourRTMPClient() {
 Boolean ourRTMPClient::sendH264FramePacket(u_int8_t* data, unsigned size, double pts) {
 	do {
 		if (NULL != data && size > 4) {
+			if (pts == -1.0) {
+				gettimeofday(&timeNow, NULL);
+				pts = (DWORD(timeNow.tv_sec * 1000000 + timeNow.tv_usec) - fPtsOffset) / 1000.0;
+			}
 #ifdef DEBUG
 			u_int8_t nut = data[4] & 0x1F;
-			envir() << *this << "\n\tsent packet: type=video" << ", time=" << pts
+			envir() << *this << "sent packet: type=video" << ", time=" << pts
 			<< ", size=" << size << ", b[4]="
 			<< (unsigned char*) data[4] << "("
 			<< (isSPS(nut) ? "SPS" : (isPPS(nut) ? "PPS" : (isIDR(nut) ? "I" : (isNonIDR(nut) ? "P" : "Unknown"))))

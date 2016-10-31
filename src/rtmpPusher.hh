@@ -6,6 +6,7 @@
 #include "BasicUsageEnvironment.hh"
 #include "GroupsockHelper.hh"
 #include "srs_librtmp.h"
+#include "EasyAACEncoderAPI.h"
 
 typedef unsigned int UINT;
 typedef unsigned char BYTE;
@@ -15,12 +16,37 @@ typedef unsigned long DWORD;
 
 #define RECONNECT_WAIT_DELAY(n) if (n >= 3) { usleep(CHECK_ALIVE_TASK_TIMER_INTERVAL); n = 0; }
 
+class DummySink;	//forward
+int h264_decode_sps(BYTE* buf, unsigned int nLen, int &width, int &height, int &fps); //forward
+
+typedef struct {
+	char const* srcStreamURL;	//rtsp url or file ptah
+	char const* destStreamURL;	//rtmp url
+	Authenticator* rtspAUTH;
+	Boolean rtspUseTcp;
+	unsigned videoFps;
+	Boolean audioTrack;
+} conn_item_params_t, *conn_item_params_ptr;
+
+//Only support nalu by rtmp protocol
 Boolean isSPS(u_int8_t nut) { return nut == 7; } //Sequence parameter set
 Boolean isPPS(u_int8_t nut) { return nut == 8; } //Picture parameter set
 Boolean isIDR(u_int8_t nut) { return nut == 5; } //Coded slice of an IDR picture
 Boolean isNonIDR(u_int8_t nut) { return nut == 1; } //Coded slice of a non-IDR picture
 //Boolean isSEI(u_int8_t nut) { return nut == 6; } //Supplemental enhancement information
 //Boolean isAUD(u_int8_t nut) { return nut == 9; } //Access unit delimiter
+
+UsageEnvironment& operator << (UsageEnvironment& env, const RTSPClient& rtspClient) {
+    return env << "[URL:\"" << rtspClient.url() << "\"]: ";
+}
+
+UsageEnvironment& operator<< (UsageEnvironment& env, const MediaSubsession& subsession) {
+    return env << subsession.mediumName() << "/" << subsession.codecName();
+}
+
+UsageEnvironment* thatEnv;
+char const* progName = NULL;
+struct timeval timeNow;
 
 class StreamClientState {
 public:
@@ -30,57 +56,57 @@ public:
 	MediaSession* session;
 	MediaSubsessionIterator* iter;
 	MediaSubsession* subsession;
+	struct timeval gettingLastFrameTime;
 	TaskToken streamTimerTask;
 	TaskToken checkAliveTimerTask;
 	double duration;
-	struct timeval lastGettingFrameTime;
 };
 
 class ourRTMPClient: public Medium {
 public:
-	static ourRTMPClient* createNew(UsageEnvironment& env,
-			RTSPClient* rtspClient);
-	static ourRTMPClient* createNew(UsageEnvironment& env,
-				char const* rtmpUrl, Boolean needAudioTrack = False);
+	static ourRTMPClient* createNew(UsageEnvironment& env, RTSPClient* rtspClient);
+	static ourRTMPClient* createNew(UsageEnvironment& env, char const* rtmpUrl);
 protected:
 	ourRTMPClient(UsageEnvironment& env, RTSPClient* rtspClient);
-	ourRTMPClient(UsageEnvironment& env, char const* rtmpUrl, Boolean needAudioTrack);
+	ourRTMPClient(UsageEnvironment& env, char const* rtmpUrl);
 	virtual ~ourRTMPClient();
 public:
-	Boolean sendH264FramePacket(u_int8_t* data, unsigned size, double pts);
-	Boolean sendAACFramePacket(u_int8_t* data, unsigned size, double pts);
+	Boolean sendH264FramePacket(u_int8_t* data, unsigned size, u_int32_t pts);
+	Boolean sendAACFramePacket(u_int8_t* data, unsigned size, u_int32_t pts, u_int8_t sound_size = 0, u_int8_t sound_type = 0);
 	char* url() const { return strDup(fUrl); }
+	Boolean fWaitFirstFrameFlag;
 private:
 	srs_rtmp_t rtmp;
 	RTSPClient* fSource;
-	Boolean fNeedAudioTrack;
 	char const* fUrl;
 };
 
+UsageEnvironment& operator << (UsageEnvironment& env, const ourRTMPClient& rtmpClient) {
+    return env << "[URL:\"" << rtmpClient.url() << "\"]: ";
+}
+
 class ourRTSPClient: public RTSPClient {
 public:
-	static ourRTSPClient* createNew(UsageEnvironment& env, unsigned channelId);
+	static ourRTSPClient* createNew(UsageEnvironment& env, conn_item_params_t& params);
 protected:
-	ourRTSPClient(UsageEnvironment& env, unsigned channelId);
+	ourRTSPClient(UsageEnvironment& env, conn_item_params_t& params);
 	virtual ~ourRTSPClient();
 public:
 	StreamClientState scs;
 	ourRTMPClient* publisher;
-	unsigned id() const { return fChannelId; };
-private:
-	unsigned fChannelId;
+	conn_item_params_t fParams;
 };
 
-int h264_decode_sps(BYTE * buf, unsigned int nLen, int &width, int &height, int &fps); //forward
-
-class DummyRTPSink: public MediaSink {
+class DummySink: public MediaSink {
 public:
-	static DummyRTPSink* createNew(UsageEnvironment& env,
+	static DummySink* createNew(UsageEnvironment& env,
 			MediaSubsession& subsession, char const* streamId = NULL);
+
 protected:
-	DummyRTPSink(UsageEnvironment& env, MediaSubsession& subsession,
+	DummySink(UsageEnvironment& env, MediaSubsession& subsession,
 			char const* streamId);
-	virtual ~DummyRTPSink();
+
+	virtual ~DummySink();
 
 	static void afterGettingFrame(void* clientData, unsigned frameSize,
 			unsigned numTruncatedBytes, struct timeval presentationTime,
@@ -89,24 +115,51 @@ protected:
 	void afterGettingFrame(unsigned frameSize, unsigned numTruncatedBytes,
 			struct timeval presentationTime, unsigned durationInMicroseconds);
 
-	// redefined virtual functions:
-	virtual Boolean continuePlaying();
-public:
-	void setBufferSize(unsigned size) { fBufferSize = size; delete[] fReceiveBuffer; fReceiveBuffer = new u_int8_t[size]; }
-
-	Boolean sendRawPacket(u_int8_t* data, unsigned size, double pts, Boolean isVideo = True) {
-		if (pts < 0)
-			return True;
-		else {
-			ourRTMPClient* rtmpClient = (ourRTMPClient*)((ourRTSPClient*) fSubsession.miscPtr)->publisher;
-			if(isVideo)
-				return rtmpClient->sendH264FramePacket(data, size, pts);
-			else
-				return rtmpClient->sendAACFramePacket(data, size, pts);
-		}
+	void setBufferSize(unsigned size) {
+		fBufferSize = size;
+		delete[] fReceiveBuffer;
+		fReceiveBuffer = new u_int8_t[size];
 	}
 
-	Boolean sendSpsPacket(u_int8_t* data, unsigned size, double pts = -1.0) {
+	int getSamplingFrequencyIndex(unsigned samplingfrequeny) {
+		switch(samplingfrequeny) {
+			case 96000:
+				return 0x0;
+			case 88200:
+				return 0x1;
+			case 64000:
+				return 0x2;
+			case 48000:
+				return 0x3;
+			case 44100:
+				return 0x4;
+			case 32000:
+				return 0x5;
+			case 24000:
+				return 0x6;
+			case 22050:
+				return 0x7;
+			case 16000:
+				return 0x8;
+			case 12000:
+				return 0x9;
+			case 11025:
+				return 0xa;
+			case 8000:
+				return 0xb;
+			default:
+				return -1;
+		}
+	}
+public:
+	ourRTMPClient* fClient;
+
+	// redefined virtual functions:
+	virtual Boolean continuePlaying();
+
+	void setVideoFps(unsigned fps) { fFps = fps; }
+
+	void parseSpsPacket(u_int8_t* data, unsigned size) {
 		delete[] fSps;
 		fSpsSize = size+4;
 		fSps = new u_int8_t[fSpsSize];
@@ -122,19 +175,30 @@ public:
 			fFps = fps;
 			setBufferSize(width * height * 1.5 / 8);
 		}
-		//envir() << pts <<"\th264_decode_sps: width=" << fWidth << "\theight=" << fHeight << "\tfps=" << fFps << "\tBufferSize=" << fBufferSize <<"\n";
-
-		return sendRawPacket(fSps, fSpsSize, pts);
 	}
 
-	Boolean sendPpsPacket(u_int8_t* data, unsigned size, double pts = -1.0) {
+	void parsePpsPacket(u_int8_t* data, unsigned size) {
 		delete[] fPps;
 		fPpsSize = size + 4;
 		fPps = new u_int8_t[fPpsSize];
 		fPps[0] = 0; fPps[1] = 0;
 		fPps[2] = 0; fPps[3] = 1;
 		memmove(fPps+4, data, size);
-		return sendRawPacket(fPps, fPpsSize, pts);
+	}
+
+	void addADTStoPacket(u_int8_t* data, unsigned size) {
+		int profile = 2;  //AAC LC
+		int freqIdx = getSamplingFrequencyIndex(fSubsession.rtpTimestampFrequency());
+		int chanCfg = fSubsession.numChannels();
+
+		// fill in ADTS data
+		data[0] = (u_int8_t)0xFF;
+		data[1] = (u_int8_t)0xF9;
+		data[2] = (u_int8_t)(((profile-1) << 6) + (freqIdx << 2) +(chanCfg >> 2));
+		data[3] = (u_int8_t)(((chanCfg&3) << 6) + (size >> 11));
+		data[4] = (u_int8_t)((size&0x7FF) >> 3);
+		data[5] = (u_int8_t)(((size&7) << 5) + 0x1F);
+		data[6] = (u_int8_t)0xFC;
 	}
 private:
 	u_int8_t* fSps;
@@ -145,52 +209,13 @@ private:
 	unsigned fBufferSize;
 	char* fStreamId;
 	MediaSubsession& fSubsession;
-	Boolean fHaveWrittenFirstFrame;
 	int fWidth;
 	int fHeight;
 	int fFps;
-};
-
-class DummyFileSink: public MediaSink {
-public:
-	static DummyFileSink* createNew(UsageEnvironment& env, ourRTMPClient* rtmpClient, char const* streamId = NULL);
-
-	// redefined virtual functions:
-	virtual Boolean continuePlaying();
-protected:
-	DummyFileSink(UsageEnvironment& env, ourRTMPClient* rtmpClient, char const* streamId);
-	// called only by createNew()
-	virtual ~DummyFileSink();
-protected:
-	static void afterGettingFrame(void* clientData, unsigned frameSize,
-			unsigned numTruncatedBytes, struct timeval presentationTime,
-			unsigned durationInMicroseconds);
-
-	virtual void afterGettingFrame(unsigned frameSize,
-			unsigned numTruncatedBytes, struct timeval presentationTime);
-
-	void setBufferSize(unsigned size) { fBufferSize = size; delete[] fReceiveBuffer; fReceiveBuffer = new u_int8_t[size]; }
-public:
-	void setVideoFps(unsigned fps) { fFps = fps; }
-	ourRTMPClient* fClient;
-	u_int8_t* fData () const { return fReceiveBuffer; }
-	unsigned fSize;
-	double fPts;
 private:
-	double fPtsOffset;
-	u_int8_t* fSps;
-	u_int8_t* fPps;
-	unsigned fSpsSize;
-	unsigned fPpsSize;
-	u_int8_t* fReceiveBuffer;
-	unsigned fBufferSize;
-	char* fStreamId;
-	Boolean fHaveWrittenFirstFrame;
-	int fWidth;
-	int fHeight;
-	int fFps;
+	EasyAACEncoder_Handle aacEncHandle;
+	u_int8_t* fAACBuffer;
 };
-#endif /* RTMPPUSHER_HH_ */
 
 UINT Ue(BYTE *pBuff, UINT nLen, UINT &nStartBit) {
 	UINT nZeroNum = 0;
@@ -430,3 +455,4 @@ int h264_decode_sps(BYTE * buf, unsigned int nLen, int &width, int &height, int 
 	}
 	return false;
 }
+#endif /* RTMPPUSHER_HH_ */
