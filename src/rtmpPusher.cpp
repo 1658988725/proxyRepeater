@@ -481,9 +481,10 @@ DummySink* DummySink::createNew(UsageEnvironment& env, MediaSubsession& subsessi
 
 DummySink::DummySink(UsageEnvironment& env, MediaSubsession& subsession, char const* streamId)
 	: MediaSink(env), fClient(NULL), fSps(NULL), fPps(NULL), fSpsSize(0), fPpsSize(0),
-	  fSubsession(subsession), fWidth(640), fHeight(480), fFps(0), aacEncHandle(NULL), fAACBuffer(NULL) {
+	  fSubsession(subsession), fWidth(640), fHeight(480), fFps(0), fPtsOffset(0), fIdrOffset(0),
+	  aacEncHandle(NULL), fAACBuffer(NULL) {
 	fStreamId = strDup(streamId);
-	fBufferSize = fWidth * fHeight * 1.5 / 8;
+	fBufferSize = fWidth * fHeight * 2 / 8;
 	fReceiveBuffer = new u_int8_t[fBufferSize];
 
 	if (strcasecmp(fSubsession.mediumName(), "audio") == 0) {
@@ -562,15 +563,25 @@ void DummySink::afterGettingFrame(unsigned frameSize, unsigned numTruncatedBytes
 				} else if (isPPS(nal_unit_type)) {
 					parsePpsPacket(fReceiveBuffer+4, frameSize);
 				} else if (isIDR(nal_unit_type)) {
-					if (!fClient->sendH264FramePacket(fSps, fSpsSize, 0)
-							|| !fClient->sendH264FramePacket(fPps, fPpsSize, 0)
-							|| !fClient->sendH264FramePacket(fReceiveBuffer, frameSize+4, 0))
+					if (!fClient->sendH264FramePacket(fSps, fSpsSize, 0))
 						goto RECONNECT;
+
+					if (!fClient->sendH264FramePacket(fPps, fPpsSize, 0))
+						goto RECONNECT;
+
+					checkComplexIDRFrame();
+
+					if (!fClient->sendH264FramePacket(fReceiveBuffer+fIdrOffset, frameSize+4-fIdrOffset, 0))
+						goto RECONNECT;
+
 					fClient->fWaitFirstFrameFlag = False;
 				}
 			} else {
-				if( isIDR(nal_unit_type) || isNonIDR(nal_unit_type)) {
-					pts = fSubsession.getNormalPlayTime(presentationTime) * 1000;
+				pts = fSubsession.getNormalPlayTime(presentationTime) * 1000;
+				if (isIDR(nal_unit_type)) {
+					if (!fClient->sendH264FramePacket(fReceiveBuffer+fIdrOffset, frameSize+4-fIdrOffset, pts))
+						goto RECONNECT;
+				} else if (isNonIDR(nal_unit_type)) {
 					if (!fClient->sendH264FramePacket(fReceiveBuffer, frameSize+4, pts))
 						goto RECONNECT;
 				}

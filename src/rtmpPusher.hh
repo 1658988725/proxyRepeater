@@ -151,6 +151,13 @@ protected:
 				return -1;
 		}
 	}
+
+	void checkComplexIDRFrame() {
+		fIdrOffset = fSpsSize + fPpsSize;
+		u_int8_t* idr = fReceiveBuffer + fIdrOffset;
+		fIdrOffset = (idr[0] == 0 && idr[1] == 0 && idr[2] == 0 && idr[3] == 1 && isIDR(idr[4] & 0x1F)) ? fIdrOffset : 0;
+	}
+
 public:
 	ourRTMPClient* fClient;
 
@@ -173,7 +180,7 @@ public:
 			fWidth = width;
 			fHeight = height;
 			fFps = fps;
-			setBufferSize(width * height * 1.5 / 8);
+			setBufferSize(width * height * 2 / 8);
 		}
 	}
 
@@ -215,6 +222,8 @@ private:
 	int fWidth;
 	int fHeight;
 	int fFps;
+	u_int32_t fPtsOffset;
+	u_int8_t fIdrOffset;
 private:
 	EasyAACEncoder_Handle aacEncHandle;
 	u_int8_t* fAACBuffer;

@@ -3,13 +3,14 @@
 #include "rtmpPusher.hh"
 #include "ourMD5.hh"
 
-#define DEBUG
+//#define DEBUG
 
 typedef struct {
 	unsigned packetType;
 	DummySink* sink;
 	u_int8_t* data;
 	unsigned size;
+	u_int32_t pts;
 } send_frame_packet_t, *send_frame_packet_ptr;
 
 //forward
@@ -26,7 +27,7 @@ void sendFramePacket(void* clientData) {
 	send_frame_packet_ptr packet = (send_frame_packet_ptr)clientData;
 	if (packet->packetType == 0) {
 		u_int8_t nut = packet->data[4] & 0x1F;
-		if ((isIDR(nut) || isNonIDR(nut)) && !packet->sink->fClient->sendH264FramePacket(packet->data, packet->size)) {
+		if ((isIDR(nut) || isNonIDR(nut)) && !packet->sink->fClient->sendH264FramePacket(packet->data, packet->size, packet->pts)) {
 		}
 	} else {
 
@@ -161,9 +162,13 @@ DummySink* DummySink::createNew(UsageEnvironment& env, MediaSubsession& subsessi
 
 DummySink::DummySink(UsageEnvironment& env, MediaSubsession& subsession, char const* streamId)
 	: MediaSink(env), fSps(NULL), fPps(NULL), fSpsSize(0), fPpsSize(0),
-	  fReceiveBuffer(NULL), fSubsession(subsession), fWidth(640), fHeight(480), fFps(25) {
+	  fReceiveBuffer(NULL), fSubsession(subsession), fWidth(640), fHeight(480), fFps(25),
+	  fIdrOffset(0) {
 	fStreamId = strDup(streamId);
 	setBufferSize(fWidth * fHeight * 2 / 8);
+
+	gettimeofday(&timeNow, NULL);
+	fPtsOffset = u_int32_t(timeNow.tv_sec * 1000000 + timeNow.tv_usec);
 }
 
 DummySink::~DummySink() {
@@ -210,6 +215,10 @@ void DummySink::afterGettingFrame(unsigned frameSize, unsigned numTruncatedBytes
 		packet.sink = this;
 		packet.data = fReceiveBuffer;
 		packet.size = frameSize;
+
+		gettimeofday(&timeNow, NULL);
+		packet.pts = (u_int32_t(timeNow.tv_sec * 1000000 + timeNow.tv_usec) - fPtsOffset) / 1000;
+
 		envir().taskScheduler().scheduleDelayedTask(1000 / fFps * 1000, (TaskFunc*)sendFramePacket, &packet);
 	}
 }
@@ -221,7 +230,7 @@ ourRTMPClient* ourRTMPClient::createNew(UsageEnvironment& env, char const* rtmpU
 }
 
 ourRTMPClient::ourRTMPClient(UsageEnvironment& env, char const* rtmpUrl)
-	: Medium(env), fWaitFirstFrameFlag(True), rtmp(NULL), fSource(NULL), fPtsOffset(0), fUrl(rtmpUrl) {
+	: Medium(env), fWaitFirstFrameFlag(True), rtmp(NULL), fSource(NULL), fUrl(rtmpUrl) {
 	do {
 		rtmp = srs_rtmp_create(rtmpUrl);
 		if (srs_rtmp_handshake(rtmp) != 0) {
@@ -245,10 +254,6 @@ ourRTMPClient::ourRTMPClient(UsageEnvironment& env, char const* rtmpUrl)
 			break;
 		}
 		envir() << *this << "publish stream success" << "\n";
-
-		gettimeofday(&timeNow, NULL);
-		fPtsOffset = timeNow.tv_sec * 1000000 + timeNow.tv_usec;
-
 		return;
 	} while (0);
 
@@ -263,21 +268,9 @@ ourRTMPClient::~ourRTMPClient() {
 	rtmp = NULL;
 }
 
-Boolean ourRTMPClient::sendH264FramePacket(u_int8_t* data, unsigned size, double pts) {
+Boolean ourRTMPClient::sendH264FramePacket(u_int8_t* data, unsigned size, u_int32_t pts) {
 	do {
 		if (NULL != data && size > 4) {
-			if (pts == -1.0) {
-				gettimeofday(&timeNow, NULL);
-				pts = (DWORD(timeNow.tv_sec * 1000000 + timeNow.tv_usec) - fPtsOffset) / 1000.0;
-			}
-#ifdef DEBUG
-			u_int8_t nut = data[4] & 0x1F;
-			envir() << *this << "sent packet: type=video" << ", time=" << pts
-			<< ", size=" << size << ", b[4]="
-			<< (unsigned char*) data[4] << "("
-			<< (isSPS(nut) ? "SPS" : (isPPS(nut) ? "PPS" : (isIDR(nut) ? "I" : (isNonIDR(nut) ? "P" : "Unknown"))))
-			<< ")\n";
-#endif
 			int ret = srs_h264_write_raw_frames(rtmp, (char*) data, size, pts, pts);
 			if (ret != 0) {
 				if (srs_h264_is_dvbsp_error(ret)) {
@@ -291,6 +284,14 @@ Boolean ourRTMPClient::sendH264FramePacket(u_int8_t* data, unsigned size, double
 					break;
 				}
 			}
+#ifdef DEBUG
+			u_int8_t nut = data[4] & 0x1F;
+			envir() << *this << "sent packet: type=video" << ", time=" << pts
+			<< ", size=" << size << ", b[4]="
+			<< (unsigned char*) data[4] << "("
+			<< (isSPS(nut) ? "SPS" : (isPPS(nut) ? "PPS" : (isIDR(nut) ? "I" : (isNonIDR(nut) ? "P" : "Unknown"))))
+			<< ")\n";
+#endif
 		}
 		return True;
 	} while (0);
