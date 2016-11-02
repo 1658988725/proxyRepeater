@@ -40,6 +40,7 @@ int main(int argc, char** argv) {
 	long nonce = 0L;
 	char const* host = "127.0.0.1:1935";
 	char const* app = "live";
+	char const* stream = "demo";
 
 	params.videoFps = 0;
 
@@ -77,7 +78,11 @@ int main(int argc, char** argv) {
 		}
 	}
 
-	if(strlen(rtmpUrl) == 0) {
+	if (params.streamName == NULL) {
+		params.streamName = stream;
+	}
+
+	if (strlen(rtmpUrl) == 0) {
 		sprintf(rtmpUrl, "rtmp://%s/%s%s/%s", host, app, token, params.streamName);
 	}
 
@@ -473,5 +478,5 @@ void usage(UsageEnvironment& env) {
 	env << " -h: set endpoint host e.g: 127.0.0.1:1935" << "\n";
 	env << " -a: set endpoint appname default: live" << "\n";
 	env << " -p: set endpoint password" << "\n";
-	env << " -s: set endpoint streamname" << "\n";
+	env << " -s: set endpoint streamname default: demo" << "\n";
 }
