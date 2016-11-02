@@ -5,35 +5,24 @@
 
 //#define DEBUG
 
+conn_item_params_t params;
+
 typedef struct {
-	unsigned packetType;
 	DummySink* sink;
 	u_int8_t* data;
 	unsigned size;
 	u_int32_t pts;
+	u_int32_t channels;
 } send_frame_packet_t, *send_frame_packet_ptr;
+
+send_frame_packet_t videoPacket;
+send_frame_packet_t audioPacket;
 
 //forward
 void afterPlaying(void* clientData);
 void *readFileSource(void *args);
 void sendFramePacket(void* clientData);
 void usage(UsageEnvironment& env);
-
-conn_item_params_t params;
-
-send_frame_packet_t packet;
-
-void sendFramePacket(void* clientData) {
-	send_frame_packet_ptr packet = (send_frame_packet_ptr)clientData;
-	if (packet->packetType == 0) {
-		u_int8_t nut = packet->data[4] & 0x1F;
-		if ((isIDR(nut) || isNonIDR(nut)) && !packet->sink->fClient->sendH264FramePacket(packet->data, packet->size, packet->pts)) {
-		}
-	} else {
-
-	}
-	packet->sink->continuePlaying();
-}
 
 int main(int argc, char** argv) {
 	TaskScheduler* scheduler = BasicTaskScheduler::createNew();
@@ -51,7 +40,6 @@ int main(int argc, char** argv) {
 	long nonce = 0L;
 	char const* host = "127.0.0.1:1935";
 	char const* app = "live";
-	char const* stream = NULL;
 
 	params.videoFps = 0;
 
@@ -80,7 +68,7 @@ int main(int argc, char** argv) {
 					our_MD5Data((unsigned char*)token, strlen(token), md5);
 					sprintf(token, "?token=%s%ld", md5, nonce);
 				} else if (opt == 's')
-					stream = optarg;
+					params.streamName = optarg;
 				break;
 			default:
 				usage(*thatEnv);
@@ -90,7 +78,7 @@ int main(int argc, char** argv) {
 	}
 
 	if(strlen(rtmpUrl) == 0) {
-		sprintf(rtmpUrl, "rtmp://%s/%s%s/%s", host, app, token, stream);
+		sprintf(rtmpUrl, "rtmp://%s/%s%s/%s", host, app, token, params.streamName);
 	}
 
 	params.destStreamURL = strDup(rtmpUrl);
@@ -110,10 +98,24 @@ int main(int argc, char** argv) {
 }
 
 void afterPlaying(void* clientData){
-	DummySink* sink = (DummySink*)clientData;
-	sink->stopPlaying();
-	Medium::close(sink->source());
-	Medium::close(sink->fClient);
+	MediaSubsession* subsession = (MediaSubsession*)clientData;
+	ourRTMPClient* rtmpClient = ((DummySink*)subsession->sink)->fClient;
+
+	//*thatEnv << subsession->mediumName() << "/" << subsession->codecName() << "\n";
+	Medium::close(subsession->sink);
+	subsession->sink = NULL;
+
+	MediaSession& session = subsession->parentSession();
+	MediaSubsessionIterator iter(session);
+	while ((subsession = iter.next()) != NULL) {
+		if (subsession->sink != NULL) return;
+	}
+
+	Medium::close(&session);
+
+	Medium::close(rtmpClient);
+	rtmpClient = NULL;
+
 	//play
 	readFileSource((void*)&params);
 }
@@ -123,34 +125,64 @@ void *readFileSource(void *args) {
 		return (void*) EXIT_FAILURE;
 
 	conn_item_params_ptr ptr = (conn_item_params_ptr)args;
-	FramedSource* fSource = ByteStreamFileSource::createNew(*thatEnv, ptr->srcStreamURL);
-	if (fSource == NULL) {
-		*thatEnv << "ERROR:\tUnable to open file \"" << ptr->srcStreamURL << "\" as a byte-stream file source\n";
-		return (void*) EXIT_FAILURE;
-	}
 
 	ourRTMPClient* rtmpClient = ourRTMPClient::createNew(*thatEnv, ptr->destStreamURL);
 	if(rtmpClient == NULL) {
-		*thatEnv << "ERROR:\tPublish the failed. endpoint:\"" << ptr->destStreamURL << "\n";
+		*thatEnv << "ERROR: Publish the failed. endpoint:\"" << ptr->destStreamURL << "\n";
 		return (void*) EXIT_FAILURE;
 	}
 
-	H264VideoStreamFramer* framer = H264VideoStreamFramer::createNew(*thatEnv, fSource, True);
-	MediaSession* session = MediaSession::createNew(*thatEnv, "v=0\r\n");
+	char const* sdpDescription =
+			"v=0\nm=video 0 RTP/AVP 96\na=rtpmap:96 H264/90000\na=control:track1\nm=audio 0 RTP/AVP 0\na=rtpmap:0 MPA/44100/2\na=control:track2\n";
+
+	MediaSession* session = MediaSession::createNew(*thatEnv, sdpDescription);
 	if (session == NULL) {
-		*thatEnv << "ERROR:\ttUnable create MediaSession\n";
+		*thatEnv << *rtmpClient << "ERROR: Unable create MediaSession\n";
 		return (void*) EXIT_FAILURE;
 	}
 
-	MediaSubsessionIterator* iter = new MediaSubsessionIterator(*session);
-	DummySink* sink = DummySink::createNew(*thatEnv, *(iter->next()));
-	if (ptr->videoFps > 0) {
-		sink->setVideoFps(ptr->videoFps);
+	if (session != NULL) {
+		MediaSubsessionIterator iter(*session);
+		MediaSubsession* subsession;
+
+		while ((subsession = iter.next()) != NULL) {
+			//*thatEnv << mss->mediumName() << "/" << mss->codecName() << "\n";
+			if (strcasecmp(subsession->mediumName(), "video") == 0 && strcasecmp(subsession->codecName(), "H264") == 0) {
+				ByteStreamFileSource* videoSource = ByteStreamFileSource::createNew(*thatEnv, ptr->srcStreamURL);
+				if (videoSource == NULL) {
+					*thatEnv << *rtmpClient << "WARN: Unable to open file \"" << ptr->srcStreamURL << "\" as a byte-stream file video source\n";
+					continue;
+				}
+
+				subsession->addFilter(H264VideoStreamFramer::createNew(*thatEnv, videoSource, True));
+				subsession->sink = DummySink::createNew(*thatEnv, *subsession, ptr->destStreamURL);
+
+				DummySink* sink = (DummySink*)subsession->sink;
+				sink->fClient = rtmpClient;
+				if (ptr->videoFps > 0) {
+					sink->setFps(ptr->videoFps);
+				}
+				sink->startPlaying(*(subsession->readSource()), afterPlaying, subsession);
+
+			} else if (strcasecmp(subsession->mediumName(), "audio") == 0 && strcasecmp(subsession->codecName(), "MPA") == 0) {
+				char tmp[30];
+				sprintf(tmp, "objs/%s.aac", ptr->streamName);
+				ADTSAudioFileSource* audioSource = ADTSAudioFileSource::createNew(*thatEnv, tmp);
+				if (audioSource == NULL) {
+					*thatEnv << *rtmpClient << "WARN: Unable to open file \"" << tmp << "\" as a adts audio file source\n";
+					continue;
+				}
+
+				subsession->addFilter((FramedFilter*)audioSource);
+				subsession->sink = DummySink::createNew(*thatEnv, *subsession, ptr->destStreamURL);
+
+				DummySink* sink = (DummySink*)subsession->sink;
+				sink->fClient = rtmpClient;
+				sink->setFps(1000000 / subsession->rtpTimestampFrequency());
+				sink->startPlaying(*(subsession->readSource()), afterPlaying, subsession);
+			}
+		}
 	}
-
-	sink->fClient = rtmpClient;
-
-	sink->startPlaying(*framer, afterPlaying, sink);
 
 	return (void*)EXIT_SUCCESS;
 }
@@ -161,14 +193,48 @@ DummySink* DummySink::createNew(UsageEnvironment& env, MediaSubsession& subsessi
 }
 
 DummySink::DummySink(UsageEnvironment& env, MediaSubsession& subsession, char const* streamId)
-	: MediaSink(env), fSps(NULL), fPps(NULL), fSpsSize(0), fPpsSize(0),
-	  fReceiveBuffer(NULL), fSubsession(subsession), fWidth(640), fHeight(480), fFps(25),
-	  fIdrOffset(0) {
+	: MediaSink(env), fSps(NULL), fPps(NULL), fSpsSize(0), fPpsSize(0), fReceiveBuffer(NULL),
+	  fSubsession(subsession), fWidth(640), fHeight(480), fFps(25), fIdrOffset(0) {
 	fStreamId = strDup(streamId);
 	setBufferSize(fWidth * fHeight * 2 / 8);
 
 	gettimeofday(&timeNow, NULL);
 	fPtsOffset = u_int32_t(timeNow.tv_sec * 1000000 + timeNow.tv_usec);
+	if (strcasecmp(fSubsession.mediumName(), "audio") == 0) {
+		//envir() << fSubsession.rtpTimestampFrequency() << "\t" << fSubsession.numChannels() << "\t" << fFps << "\n";
+		unsigned nPCMBitSize = 16;
+		DWORD nMaxInputBytes = 1024 * fSubsession.numChannels() * nPCMBitSize / 8;
+		DWORD nMaxOutputBytes = (6144/8) * fSubsession.numChannels();
+		if (strcasecmp(fSubsession.codecName(), "MPEG4-GENERIC") == 0
+				|| strcasecmp(fSubsession.codecName(), "MPA") == 0) {
+			setBufferSize(nMaxInputBytes);
+			fAACBuffer = new BYTE[nMaxOutputBytes];
+		} else {
+			switch(fSubsession.rtpPayloadFormat()) {
+				case 0:	//PCMU
+				case 8:	//PCMA
+				case 2: //G726-32
+					InitParam initParam;
+					initParam.u32AudioSamplerate = fSubsession.rtpTimestampFrequency();
+					initParam.ucAudioChannel = fSubsession.numChannels();
+					initParam.u32PCMBitSize = nPCMBitSize;
+					initParam.ucAudioCodec = fSubsession.rtpPayloadFormat() == 0 ? Law_ULaw :
+							fSubsession.rtpPayloadFormat() == 8 ? Law_ALaw : Law_G726;
+					if (initParam.ucAudioCodec == Law_G726) {
+						initParam.g726param.ucRateBits = Rate16kBits;
+					}
+
+					aacEncHandle = Easy_AACEncoder_Init(initParam);
+					if (aacEncHandle != NULL) {
+						setBufferSize(nMaxInputBytes);
+						fAACBuffer = new BYTE[nMaxOutputBytes];
+					}
+					break;
+				default:
+					break;
+			}
+		}
+	}
 }
 
 DummySink::~DummySink() {
@@ -176,6 +242,10 @@ DummySink::~DummySink() {
 	delete[] fPps;
 	delete[] fReceiveBuffer;
 	delete[] fStreamId;
+	if (aacEncHandle != NULL) {
+		Easy_AACEncoder_Release(aacEncHandle);
+		delete[] fAACBuffer;
+	}
 }
 
 Boolean DummySink::continuePlaying() {
@@ -193,34 +263,78 @@ void DummySink::afterGettingFrame(void* clientData, unsigned frameSize,
 
 void DummySink::afterGettingFrame(unsigned frameSize, unsigned numTruncatedBytes,
 		struct timeval presentationTime, unsigned /*durationInMicroseconds*/) {
-	u_int8_t nut = fReceiveBuffer[4] & 0x1F;
+	if (fClient == NULL)
+		goto RECONNECT;
 
-	if(fClient->fWaitFirstFrameFlag) {
-		if (isSPS(nut)) {
-			parseSpsPacket(fReceiveBuffer + 4, frameSize);
-#ifdef DEBUG
-			envir() << *fClient << "H264 width:" << fWidth << "\theight:" << fHeight << "\tfps:" << fFps << "\n";
-#endif
-		} else if (isPPS(nut)) {
-			parsePpsPacket(fReceiveBuffer + 4, frameSize);
-		} else if (isIDR(nut)) {
-			if (!fClient->sendH264FramePacket(fSps, fSpsSize, 0)
-				|| !fClient->sendH264FramePacket(fPps, fPpsSize, 0)
-				|| !fClient->sendH264FramePacket(fReceiveBuffer, frameSize+4, 0)) return;
-			fClient->fWaitFirstFrameFlag = False;
+	if (strcasecmp(fSubsession.mediumName(), "video") == 0) {
+		if (strcasecmp(fSubsession.codecName(), "H264") == 0) {
+			u_int8_t nal_unit_type = fReceiveBuffer[4] & 0x1F; //0xFF;
+
+			if (fClient->fWaitFirstFrameFlag) {
+				if (isSPS(nal_unit_type)) {
+					parseSpsPacket(fReceiveBuffer+4, frameSize);
+				} else if (isPPS(nal_unit_type)) {
+					parsePpsPacket(fReceiveBuffer+4, frameSize);
+				} else if (isIDR(nal_unit_type)) {
+					if (!fClient->sendH264FramePacket(fSps, fSpsSize, 0))
+						goto RECONNECT;
+
+					if (!fClient->sendH264FramePacket(fPps, fPpsSize, 0))
+						goto RECONNECT;
+
+					checkComplexIDRFrame();
+
+					if (!fClient->sendH264FramePacket(fReceiveBuffer+fIdrOffset, frameSize+4-fIdrOffset, 0))
+						goto RECONNECT;
+
+					fClient->fWaitFirstFrameFlag = False;
+				}
+				goto NEXT_FRAME;
+			} else {
+				videoPacket.sink = this;
+				videoPacket.data = isIDR(nal_unit_type) ? fReceiveBuffer+fIdrOffset : fReceiveBuffer;
+				videoPacket.size = isIDR(nal_unit_type) ? frameSize-fIdrOffset : frameSize;
+				gettimeofday(&timeNow, NULL);
+				videoPacket.pts = (u_int32_t(timeNow.tv_sec * 1000000 + timeNow.tv_usec) - fPtsOffset) / 1000;
+				videoPacket.channels = 0;
+				envir().taskScheduler().scheduleDelayedTask(1000 / fFps * 1000, (TaskFunc*)sendFramePacket, &videoPacket);
+			}
 		}
-		continuePlaying();
-	} else {
-		packet.packetType = 0;
-		packet.sink = this;
-		packet.data = fReceiveBuffer;
-		packet.size = frameSize;
+	} else if (strcasecmp(fSubsession.mediumName(), "audio") == 0 && !fClient->fWaitFirstFrameFlag) {
+		if (fAACBuffer == NULL)
+			goto NEXT_FRAME;
 
+		unsigned out_size;
+		if (aacEncHandle != NULL) { //g711uLaw  g711alaw g726
+			if(Easy_AACEncoder_Encode(aacEncHandle, fReceiveBuffer, frameSize, fAACBuffer, &out_size) <= 0)
+				goto NEXT_FRAME;
+		} else { //MPEG4-GENERIC MPA
+			if (!srs_aac_is_adts((char*)fReceiveBuffer, frameSize)) {
+				memmove(fAACBuffer+7, fReceiveBuffer, frameSize);
+				out_size = frameSize+7;
+				if(!addADTStoPacket(fAACBuffer, out_size))
+					goto NEXT_FRAME;
+			} else {
+				memmove(fAACBuffer, fReceiveBuffer, frameSize);
+				out_size =  frameSize;
+			}
+		}
+
+		audioPacket.sink = this;
+		audioPacket.data = fAACBuffer;
+		audioPacket.size = out_size;
 		gettimeofday(&timeNow, NULL);
-		packet.pts = (u_int32_t(timeNow.tv_sec * 1000000 + timeNow.tv_usec) - fPtsOffset) / 1000;
-
-		envir().taskScheduler().scheduleDelayedTask(1000 / fFps * 1000, (TaskFunc*)sendFramePacket, &packet);
+		audioPacket.pts = (u_int32_t(timeNow.tv_sec * 1000000 + timeNow.tv_usec) - fPtsOffset) / 1000;
+		audioPacket.channels = fSubsession.numChannels();
+		envir().taskScheduler().scheduleDelayedTask(fFps * 1000, (TaskFunc*)sendFramePacket, &audioPacket);
 	}
+
+	return;
+
+RECONNECT:
+	fClient = ourRTMPClient::createNew(envir(), fStreamId);
+NEXT_FRAME:
+	continuePlaying();
 }
 
 //Implementation of "ourRTMPClient":
@@ -298,6 +412,56 @@ Boolean ourRTMPClient::sendH264FramePacket(u_int8_t* data, unsigned size, u_int3
 
 	Medium::close(this);
 	return False;
+}
+
+Boolean ourRTMPClient::sendAACFramePacket(u_int8_t* data, unsigned size, u_int32_t pts, u_int8_t sound_size, u_int8_t sound_type) {
+	do {
+		if (NULL != data && size > 0) {
+
+			//sound_format:   0 = Linear PCM, platform endian
+	        //				  1 = ADPCM
+	        //                2 = MP3
+	        //                7 = G.711 A-law logarithmic PCM
+	        //                8 = G.711 mu-law logarithmic PCM
+	        //                10 = AAC
+	        //                11 = Speex
+			char sound_format = 10;
+			//sound_rate: 0 = 5.5kHz(?auto)  1 = 11kHz 2 = 22kHz 3 = 44kHz
+			char sound_rate = 0;
+			//sound_size: 0 = 8-bit samples  1 = 16-bit samples
+			//sound_type: 0 = Mono sound  1 = Stereo sound
+			int ret = srs_audio_write_raw_frame(rtmp, sound_format, sound_rate, sound_size, sound_type, (char*) data, size, pts);
+			if (ret != 0) {
+				envir() << *this << "send audio raw data failed. code=" << ret << "\n";
+			}
+#ifdef DEBUG
+		envir() << *this <<"sent packet: type=audio" << ", time=" << pts
+			<< ", size=" << size << ", codec=" << sound_format << ", rate=" << sound_rate
+			<< ", sample=" << sound_size << ", channel=" << sound_type << "\n";
+#endif
+		}
+		return True;
+	} while (0);
+
+	Medium::close(this);
+	return False;
+}
+
+void sendFramePacket(void* clientData) {
+	send_frame_packet_ptr pkt = (send_frame_packet_ptr)clientData;
+	if (pkt->channels == 0) {
+		u_int8_t nut = pkt->data[4] & 0x1F;
+		if (isIDR(nut) || isNonIDR(nut)) {
+			if (!pkt->sink->fClient->sendH264FramePacket(pkt->data, pkt->size, pkt->pts)) {
+
+			}
+		}
+	} else {
+		if (!pkt->sink->fClient->sendAACFramePacket(pkt->data, pkt->size, pkt->pts, 1, pkt->channels-1)) {
+
+		}
+	}
+	pkt->sink->continuePlaying();
 }
 
 void usage(UsageEnvironment& env) {

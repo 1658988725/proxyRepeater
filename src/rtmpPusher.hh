@@ -16,7 +16,8 @@ typedef unsigned long DWORD;
 
 #define RECONNECT_WAIT_DELAY(n) if (n >= 3) { usleep(CHECK_ALIVE_TASK_TIMER_INTERVAL); n = 0; }
 
-class DummySink;	//forward
+//forward
+class DummySink;
 int h264_decode_sps(BYTE* buf, unsigned int nLen, int &width, int &height, int &fps); //forward
 
 typedef struct {
@@ -26,6 +27,7 @@ typedef struct {
 	Boolean rtspUseTcp;
 	unsigned videoFps;
 	Boolean audioTrack;
+	char const* streamName;
 } conn_item_params_t, *conn_item_params_ptr;
 
 //Only support nalu by rtmp protocol
@@ -164,7 +166,7 @@ public:
 	// redefined virtual functions:
 	virtual Boolean continuePlaying();
 
-	void setVideoFps(unsigned fps) { fFps = fps; }
+	void setFps(unsigned fps) { fFps = fps; }
 
 	void parseSpsPacket(u_int8_t* data, unsigned size) {
 		delete[] fSps;

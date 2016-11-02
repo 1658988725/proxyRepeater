@@ -87,10 +87,15 @@ CP_ARRAY parseConfData(cJSON* conf) {
 				sprintf(rtmpUrl, "%s?token=%s%ld", rtmpUrl, md5, nonce);
 			}
 
-			if (stream != NULL)
-				sprintf(rtmpUrl, "%s/%s", rtmpUrl, stream->valuestring);
-			else
-				sprintf(rtmpUrl, "%s/ch%d", rtmpUrl, i);
+			if (stream != NULL) {
+				params.streamName =  stream->valuestring;
+				sprintf(rtmpUrl, "%s/%s", rtmpUrl, params.streamName);
+			} else {
+				char tmp[50];
+				sprintf(tmp, "ch%d", i);
+				params.streamName = tmp;
+				sprintf(rtmpUrl, "%s/%s", rtmpUrl, params.streamName);
+			}
 
 			params.destStreamURL = strDup(rtmpUrl);
 			rval.push_back(params);
