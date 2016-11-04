@@ -3,18 +3,21 @@
     git clone https://github.com/aesirteam/proxyRepeater.git
     cd ./proxyRepeater
     chmod +x genMakefiles
-    ./genMakefiles linux-64
+    ./genMakefiles linux-x64
     make -j4
 #Run Program
 ###
-    ./objs/testSrslibrtmp
+    ./objs/rtmpPusher-x64 -c objs/srs.conf
+    ./objs/streamCasterPusher-x64 -i objs/demo.sdp
 #Clean project
 ###
     make clean
+    or
+    make distclean
 #Create nodejs addon(v0.10.x or v0.12.x)
 ###
     ./genMakefiles linux-x64
-    make node
+    make node -j4
 #Nodejs source sample
 ###
     var nvr = require('./build/Release/node_nvr_addon.node');
