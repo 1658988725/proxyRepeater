@@ -8,6 +8,7 @@
 #Run Program
 ###
     ./objs/rtmpPusher-x64 -c objs/srs.conf
+    or
     ./objs/streamCasterPusher-x64 -i objs/demo.sdp
 #Clean project
 ###
