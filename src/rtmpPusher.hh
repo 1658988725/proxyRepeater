@@ -20,6 +20,9 @@
 #define VIDEO_MIN_HEIGHT		480
 #define	VIDEO_DEFAULT_FPS		25
 
+class DummySink;		//forward
+class ourRTMPClient;	//forward
+
 typedef struct {
 	char const* srcStreamURL;	//rtsp url or file ptah
 	char const* destStreamURL;	//rtmp url
@@ -27,6 +30,15 @@ typedef struct {
 	Boolean rtspUseTcp;
 	Boolean audioTrack;
 } conn_item_params_t, *conn_item_params_ptr;
+
+typedef struct {
+	DummySink* sink;
+	u_int8_t* data;
+	unsigned size;
+	u_int32_t pts;
+	u_int32_t channels;
+	ourRTMPClient* client;
+} send_frame_packet_t, *send_frame_packet_ptr;
 
 //Only support nalu by rtmp protocol
 Boolean isSPS(u_int8_t nut) { return nut == 7; } //Sequence parameter set
@@ -278,9 +290,10 @@ private:
 	u_int64_t fPtsOffset;
 	u_int8_t fIdrOffset;
 	Boolean fWaitFirstFrameFlag;
-private:
 	EasyAACEncoder_Handle aacEncHandle;
 	u_int8_t* fAACBuffer;
+	send_frame_packet_t videoPkt;
+	send_frame_packet_t audioPkt;
 };
 
 #endif /* RTMPPUSHER_HH_ */

@@ -38,13 +38,15 @@ Boolean runDaemonMode = False;
 unsigned rtspReconnectCount = 0, rtmpReconnectCount = 0;
 
 void openURL(void* args) {
-	if (args == NULL)
-		return;
+	if (args == NULL) return;
 
 	conn_item_params_ptr params = (conn_item_params_ptr)args;
+
 	ourRTSPClient* rtspClient = ourRTSPClient::createNew(*thatEnv, *params);
 	if (rtspClient == NULL) {
-		*thatEnv << "ERROR: Failed to create a RTSP client for URL \"" << params->srcStreamURL << "\": " << thatEnv->getResultMsg() << "\n";
+		*thatEnv << "ERROR: Failed to create a RTSP client for URL \""
+				<< params->srcStreamURL << "\": " << thatEnv->getResultMsg()
+				<< "\n";
 		return;
 	}
 
@@ -341,6 +343,7 @@ DummySink::DummySink(UsageEnvironment& env, MediaSubsession& subsession, char co
 		unsigned nPCMBitSize = 16;
 		fBufferSize = 1024 * fSubsession.numChannels() * nPCMBitSize / 8;
 		unsigned nMaxOutputBytes = (6144 / 8) * fSubsession.numChannels();
+		fFps = 1000000 / fSubsession.rtpTimestampFrequency();
 
 		if (strcasecmp(fSubsession.codecName(), "MPA") == 0
 				|| (strcasecmp(fSubsession.codecName(), "MPEG4-GENERIC") == 0
@@ -359,8 +362,7 @@ DummySink::DummySink(UsageEnvironment& env, MediaSubsession& subsession, char co
 				initParam.g726param.ucRateBits = Rate16kBits;
 			}
 
-			aacEncHandle = Easy_AACEncoder_Init(initParam);
-			if (aacEncHandle != NULL) {
+			if ((aacEncHandle = Easy_AACEncoder_Init(initParam)) != NULL) {
 				fAACBuffer = new BYTE[nMaxOutputBytes];
 			}
 		}
@@ -388,13 +390,12 @@ void DummySink::afterGettingFrame(unsigned frameSize, unsigned numTruncatedBytes
 		unsigned /*durationInMicroseconds*/) {
 	ourRTSPClient* rtspClient = (ourRTSPClient*)(fSubsession.miscPtr);
 	StreamClientState& scs = rtspClient->scs;
+	u_int32_t pts;
 
 	gettimeofday(&scs.gettingLastFrameTime, NULL);
 
 	if (rtspClient->publisher == NULL)
 		goto RECONNECT;
-
-	u_int32_t pts;
 
 	if (strcasecmp(fSubsession.mediumName(), "video") == 0) {
 		if (strcasecmp(fSubsession.codecName(), "H264") == 0) {
@@ -418,6 +419,7 @@ void DummySink::afterGettingFrame(unsigned frameSize, unsigned numTruncatedBytes
 
 					fWaitFirstFrameFlag = False;
 				}
+				goto NEXT_FRAME;
 			} else {
 				pts = fSubsession.getNormalPlayTime(presentationTime) * 1000;
 				if (isIDR(nal_unit_type)) {
@@ -449,6 +451,7 @@ void DummySink::afterGettingFrame(unsigned frameSize, unsigned numTruncatedBytes
 			pts = fSubsession.getNormalPlayTime(presentationTime) * 1000;
 			if (!rtspClient->publisher->sendAACFramePacket(fAACBuffer, out_size, pts, 1, fSubsession.numChannels()-1))
 				goto RECONNECT;
+
 		}
 	}
 	goto NEXT_FRAME;

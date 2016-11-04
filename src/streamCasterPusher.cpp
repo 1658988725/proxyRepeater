@@ -1,25 +1,15 @@
 
 #include "rtmpPusher.hh"
 
-typedef struct {
-	DummySink* sink;
-	u_int8_t* data;
-	unsigned size;
-	u_int32_t pts;
-	u_int32_t channels;
-} send_frame_packet_t, *send_frame_packet_ptr;
-
-conn_item_params_t params;
-ourRTMPClient* rtmpClient;
-send_frame_packet_t videoPacket;
-send_frame_packet_t audioPacket;
-
 //forward
 void afterPlaying(void* clientData);
 void readByteStreamSource(void* args);
 int readSdpFile(char const* path, char*& sdpDescription);
 void sendFramePacket(void* clientData);
 void usage(UsageEnvironment& env);
+
+conn_item_params_t params;
+ourRTMPClient* rtmpClient;
 
 int main(int argc, char** argv) {
 	TaskScheduler* scheduler = BasicTaskScheduler::createNew();
@@ -272,13 +262,14 @@ void DummySink::afterGettingFrame(unsigned frameSize, unsigned numTruncatedBytes
 				}
 				goto NEXT_FRAME;
 			} else {
-				videoPacket.sink = this;
-				videoPacket.data = isIDR(nal_unit_type) ? fReceiveBuffer+fIdrOffset : fReceiveBuffer;
-				videoPacket.size = isIDR(nal_unit_type) ? frameSize-fIdrOffset : frameSize;
+				videoPkt.client = rtmpClient;
+				videoPkt.sink = this;
+				videoPkt.data = isIDR(nal_unit_type) ? fReceiveBuffer+fIdrOffset : fReceiveBuffer;
+				videoPkt.size = isIDR(nal_unit_type) ? frameSize-fIdrOffset : frameSize;
 				gettimeofday(&timeNow, NULL);
-				videoPacket.pts = (u_int64_t(timeNow.tv_sec * 1000000 + timeNow.tv_usec) - fPtsOffset) / 1000;
-				videoPacket.channels = 0;
-				envir().taskScheduler().scheduleDelayedTask(1000 / fFps * 1000, (TaskFunc*)sendFramePacket, &videoPacket);
+				videoPkt.pts = (u_int64_t(timeNow.tv_sec * 1000000 + timeNow.tv_usec) - fPtsOffset) / 1000;
+				videoPkt.channels = 0;
+				envir().taskScheduler().scheduleDelayedTask(1000 / fFps * 1000, (TaskFunc*)sendFramePacket, &videoPkt);
 				return;
 			}
 		}
@@ -302,13 +293,14 @@ void DummySink::afterGettingFrame(unsigned frameSize, unsigned numTruncatedBytes
 			}
 		}
 
-		audioPacket.sink = this;
-		audioPacket.data = fAACBuffer;
-		audioPacket.size = out_size;
+		audioPkt.client = rtmpClient;
+		audioPkt.sink = this;
+		audioPkt.data = fAACBuffer;
+		audioPkt.size = out_size;
 		gettimeofday(&timeNow, NULL);
-		audioPacket.pts = (u_int64_t(timeNow.tv_sec * 1000000 + timeNow.tv_usec) - fPtsOffset) / 1000;
-		audioPacket.channels = fSubsession.numChannels();
-		envir().taskScheduler().scheduleDelayedTask(fFps * 1000, (TaskFunc*)sendFramePacket, &audioPacket);
+		audioPkt.pts = (u_int64_t(timeNow.tv_sec * 1000000 + timeNow.tv_usec) - fPtsOffset) / 1000;
+		audioPkt.channels = fSubsession.numChannels();
+		envir().taskScheduler().scheduleDelayedTask(fFps * 1000, (TaskFunc*)sendFramePacket, &audioPkt);
 		return;
 	}
 
@@ -366,12 +358,12 @@ void sendFramePacket(void* clientData) {
 	if (pkt->channels == 0) {
 		u_int8_t nut = pkt->data[4] & 0x1F;
 		if (isIDR(nut) || isNonIDR(nut)) {
-			if (!rtmpClient->sendH264FramePacket(pkt->data, pkt->size, pkt->pts)) {
+			if (!pkt->client->sendH264FramePacket(pkt->data, pkt->size, pkt->pts)) {
 
 			}
 		}
 	} else {
-		if (!rtmpClient->sendAACFramePacket(pkt->data, pkt->size, pkt->pts, 1, pkt->channels-1)) {
+		if (!pkt->client->sendAACFramePacket(pkt->data, pkt->size, pkt->pts, 1, pkt->channels-1)) {
 
 		}
 	}
