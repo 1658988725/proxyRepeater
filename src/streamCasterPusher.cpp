@@ -183,9 +183,9 @@ DummySink::DummySink(UsageEnvironment& env, MediaSubsession& subsession, char co
 	fStreamId = strDup(streamId);
 
 	if(strcasecmp(fSubsession.mediumName(), "video") == 0) {
-		fWidth = fSubsession.videoWidth();
-		fHeight = fSubsession.videoHeight();
-		fFps = fSubsession.videoFPS();
+		fWidth = fSubsession.videoWidth() == 0 ? VIDEO_MIN_WIDTH : fSubsession.videoWidth();
+		fHeight = fSubsession.videoHeight() == 0 ? VIDEO_MIN_HEIGHT : fSubsession.videoHeight();
+		fFps = fSubsession.videoFPS() == 0 ? VIDEO_DEFAULT_FPS : fSubsession.videoFPS();
 		fBufferSize = fWidth * fHeight * 2 / 8;
 	} else if (strcasecmp(fSubsession.mediumName(), "audio") == 0) {
 		unsigned nPCMBitSize = 16;

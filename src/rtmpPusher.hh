@@ -16,6 +16,10 @@
 
 #define RECONNECT_WAIT_DELAY(n) if (n >= 3) { usleep(CHECK_ALIVE_TASK_TIMER_INTERVAL); n = 0; }
 
+#define VIDEO_MIN_WIDTH			640
+#define VIDEO_MIN_HEIGHT		480
+#define	VIDEO_DEFAULT_FPS		25
+
 typedef struct {
 	char const* srcStreamURL;	//rtsp url or file ptah
 	char const* destStreamURL;	//rtmp url
@@ -220,11 +224,15 @@ public:
 
 		int width, height, fps;
 		h264_decode_sps(data, size, width, height, fps);
-		if (width >= fWidth || height >= fHeight) {
+		if ((width > VIDEO_MIN_WIDTH && width >= fWidth)
+				|| (height > VIDEO_MIN_HEIGHT && height >= fHeight)) {
 			fBufferSize = (fWidth = width) * (fHeight = height) * 2 / 8;
 			delete[] fReceiveBuffer;
 			fReceiveBuffer = new u_int8_t[fBufferSize];
-			fFps = fps > 0 ? fps : 25;
+		}
+
+		if (fps > 0 && fps != fFps) {
+			fFps = fps;
 		}
 	}
 
