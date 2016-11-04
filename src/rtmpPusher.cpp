@@ -1,6 +1,6 @@
+
 #include "rtmpPusher.hh"
-#include "cJSON.h"
-#include "ourMD5.hh"
+#include <vector>
 
 #ifdef NODE_V8_ADDON
 #include <node.h>
@@ -11,98 +11,13 @@
 #endif
 #endif
 
-#include <vector>
-#include <pthread.h>
-
 using namespace std;
-
-//#define DEBUG
-
-char eventLoopWatchVariable = 0;
-Boolean runDaemonMode = False;
-static unsigned rtspReconnectCount = 0, rtmpReconnectCount = 0;
 
 typedef std::vector<conn_item_params_t>  CP_ARRAY;
 
-cJSON* loadConfigFile(char const* path) {
-	FILE *f;
-	if((f = fopen(path,"rb")) == NULL)
-		return NULL;
-
-	cJSON* json = NULL;
-	fseek(f,0,SEEK_END);
-	long len = ftell(f);
-	fseek(f,0,SEEK_SET);
-	char* data = (char*)malloc(len+1);
-	if (fread(data,1,len,f) == (size_t)len) {
-		data[len]='\0';
-		json = cJSON_Parse(data);
-	}
-	free(data);
-	fclose(f);
-	return json;
-}
-
-CP_ARRAY parseConfData(cJSON* conf) {
-	CP_ARRAY rval;
-	char const* expire = "-1";
-
-	int iCount = cJSON_GetArraySize(conf);
-	for (int i = 0; i < iCount; ++i) {
-		cJSON* pItem = cJSON_GetArrayItem(conf, i);
-		if (NULL == pItem)
-			continue;
-
-		cJSON* enable = cJSON_GetObjectItem(pItem, "enable");
-		if (enable != NULL && enable->valueint == 0)
-			continue;
-
-		cJSON* rtspUrl = cJSON_GetObjectItem(pItem, "rtspUrl");
-		cJSON* rtspUsername = cJSON_GetObjectItem(pItem, "rtspUsername");
-		cJSON* rtspPassword = cJSON_GetObjectItem(pItem, "rtspPassword");
-		cJSON* rtspUseTcp = cJSON_GetObjectItem(pItem, "rtspUseTcp");
-		cJSON* endpoint = cJSON_GetObjectItem(pItem, "endpoint");
-		cJSON* stream = cJSON_GetObjectItem(pItem, "stream");
-		cJSON* password = cJSON_GetObjectItem(pItem, "password");
-		cJSON* audioTrack = cJSON_GetObjectItem(pItem, "audioTrack");
-
-		if (NULL != rtspUrl && NULL != endpoint) {
-			conn_item_params_t params;
-			params.srcStreamURL = strDup(rtspUrl->valuestring);
-			params.rtspAUTH = new Authenticator();
-			if (rtspUsername != NULL && rtspPassword != NULL) {
-				params.rtspAUTH->setUsernameAndPassword(strDup(rtspUsername->valuestring), strDup(rtspPassword->valuestring));
-			}
-			params.rtspUseTcp = (rtspUseTcp != NULL) ? rtspUseTcp->valueint == 1 : False;
-			params.audioTrack = (audioTrack != NULL) ? audioTrack->valueint == 1 : False;
-
-			char rtmpUrl[255] = {0};
-			//rtmp://host:port/app[?nonce=x&token=y]/stream
-			sprintf(rtmpUrl, "%s", endpoint->valuestring);
-			if (NULL != password && strlen(password->valuestring) > 0) {
-				long nonce = our_random();
-				char token[64] = {0}, md5[33] = {0};
-				sprintf(token, "%ld%s%s", nonce, password->valuestring, expire);
-				our_MD5Data((unsigned char*)token, strlen(token), md5);
-				sprintf(rtmpUrl, "%s?token=%s%ld", rtmpUrl, md5, nonce);
-			}
-
-			if (stream != NULL) {
-				params.streamName =  stream->valuestring;
-				sprintf(rtmpUrl, "%s/%s", rtmpUrl, params.streamName);
-			} else {
-				char tmp[50];
-				sprintf(tmp, "ch%d", i);
-				params.streamName = tmp;
-				sprintf(rtmpUrl, "%s/%s", rtmpUrl, params.streamName);
-			}
-
-			params.destStreamURL = strDup(rtmpUrl);
-			rval.push_back(params);
-		}
-	}
-	return rval;
-}
+//forward
+cJSON* loadConfigFile(char const* path);
+CP_ARRAY parseConfData(cJSON* conf);
 
 void continueAfterDESCRIBE(RTSPClient* rtspClient, int resultCode, char* resultString);
 void continueAfterSETUP(RTSPClient* rtspClient, int resultCode, char* resultString);
@@ -117,16 +32,23 @@ void setupNextSubsession(RTSPClient* rtspClient);
 void shutdownStream(RTSPClient* rtspClient, int exitCode = 0);
 void usage(UsageEnvironment& env);
 
-void *openURL(void *args) {
+CP_ARRAY items;
+char eventLoopWatchVariable = 0;
+Boolean runDaemonMode = False;
+unsigned rtspReconnectCount = 0, rtmpReconnectCount = 0;
+
+void openURL(void* args) {
+	if (args == NULL)
+		return;
+
 	conn_item_params_ptr params = (conn_item_params_ptr)args;
 	ourRTSPClient* rtspClient = ourRTSPClient::createNew(*thatEnv, *params);
 	if (rtspClient == NULL) {
 		*thatEnv << "ERROR: Failed to create a RTSP client for URL \"" << params->srcStreamURL << "\": " << thatEnv->getResultMsg() << "\n";
-		pthread_exit(0);
+		return;
 	}
 
 	rtspClient->sendDescribeCommand(continueAfterDESCRIBE, params->rtspAUTH);
-	return (void *) EXIT_SUCCESS;
 }
 
 #ifndef NODE_V8_ADDON
@@ -154,18 +76,11 @@ int main(int argc, char** argv) {
 			if (!conf) {
 				*thatEnv << "File not found or json parse fail.\"" << optarg << "\"\n";
 			} else {
-				CP_ARRAY items = parseConfData(conf);
-
+				items = parseConfData(conf);
+				unsigned delay = 100000;
 				for (CP_ARRAY::iterator it = items.begin(); it != items.end(); ++it) {
-					pthread_t cthread;
-					pthread_attr_t attributes;
-					//void *cthread_return;
-					pthread_attr_init(&attributes);
-					pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED);
-					pthread_create(&cthread, NULL, openURL, &(*it));
-
-					if (pthread_join(cthread, NULL) != 0) //pthread_join(cthread, &cthread_return)
-						continue;
+					thatEnv->taskScheduler().scheduleDelayedTask(delay, (TaskFunc*)openURL, &(*it));
+					delay += delay;
 				}
 				cJSON_Delete(conf);
 				conf = NULL;
@@ -263,18 +178,10 @@ v8::Handle<v8::Value> InitMethod(const v8::Arguments& args) {
 #endif
 	}
 
-	unsigned ch = 0;
-	for (CP_ARRAY::iterator it = channels.begin(); it != channels.end(); ++it, ch++) {
-		pthread_t cthread;
-		pthread_attr_t attributes;
-		//void *cthread_return;
-		pthread_attr_init(&attributes);
-		pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED);
-		pthread_create(&cthread, NULL, openURL, (void*)(&ch));
-
-		//pthread_join(cthread, &cthread_return)
-		if (pthread_join(cthread, NULL) != 0)
-			continue;
+	unsigned delay = 100000;
+	for (CP_ARRAY::iterator it = items.begin(); it != items.end(); ++it) {
+		thatEnv->taskScheduler().scheduleDelayedTask(delay, (TaskFunc*)openURL, &(*it));
+		delay += delay;
 	}
 
 	cJSON_Delete(conf);
@@ -352,36 +259,36 @@ ourRTMPClient* ourRTMPClient::createNew(UsageEnvironment& env, RTSPClient* rtspC
 }
 
 ourRTMPClient::ourRTMPClient(UsageEnvironment& env, RTSPClient* rtspClient)
-	: Medium(env), fWaitFirstFrameFlag(True), rtmp(NULL), fSource(rtspClient) {
+	: Medium(env), rtmp(NULL), fSource(rtspClient) {
 	conn_item_params_t params = ((ourRTSPClient*)fSource)->fParams;
 	fUrl = params.destStreamURL;
 	do {
 		rtmp = srs_rtmp_create(fUrl);
 		if (srs_rtmp_handshake(rtmp) != 0) {
-			envir() << *fSource << "simple handshake failed." << "\n";
+			envir() << "[URL:\"" << fUrl << "\"]: " << "simple handshake failed." << "\n";
 			break;
 		}
 #ifdef DEBUG
 		envir() << *fSource <<"simple handshake success" << "\n";
 #endif
 		if (srs_rtmp_connect_app(rtmp) != 0) {
-			envir() << *fSource << "connect vhost/app failed." << "\n";
+			envir() << "[URL:\"" << fUrl << "\"]: " << "connect vhost/app failed." << "\n";
 			break;
 		}
 #ifdef DEBUG
-		envir() << *fSource <<"connect vhost/app success" << "\n";
+		envir() << "[URL:\"" << fUrl << "\"]: " <<"connect vhost/app success" << "\n";
 #endif
 
 		int ret = srs_rtmp_publish_stream(rtmp);
 		if (ret != 0) {
-			envir() << *fSource << "publish stream failed.(ret=" << ret << ")\n";
+			envir() << "[URL:\"" << fUrl << "\"]: " << "publish stream failed.(ret=" << ret << ")\n";
 			break;
 		}
 #ifdef DEBUG
 		envir() << *fSource << "publish stream success" << "\n";
 #endif
 		((ourRTSPClient*)fSource)->publisher = this;
-		env << *fSource << "\n\tPublish the stream. endpoint:\"" << fUrl << "\"\n";
+		env << "[URL:\"" << fUrl << "\"]: " << "\n\tPublish the stream from \"" << params.srcStreamURL << "\"\n";
 		rtmpReconnectCount = 0;
 		return;
 	} while (0);
@@ -391,76 +298,12 @@ ourRTMPClient::ourRTMPClient(UsageEnvironment& env, RTSPClient* rtspClient)
 
 ourRTMPClient::~ourRTMPClient() {
 #ifdef DEBUG
-	envir() << *fSource << "Cleanup when unpublish. rtmpClient disconnect peer" << "\n";
+	envir() << "[URL:\"" << fUrl << "\"]: " << "Cleanup when unpublish. rtmpClient disconnect peer" << "\n";
 #endif
 	srs_rtmp_destroy(rtmp);
 	rtmp = NULL;
 	((ourRTSPClient*)fSource)->publisher = NULL;
 	RECONNECT_WAIT_DELAY(++rtmpReconnectCount);
-}
-
-Boolean ourRTMPClient::sendH264FramePacket(u_int8_t* data, unsigned size, u_int32_t pts) {
-	do {
-		if (NULL != data && size > 4) {
-			int ret = srs_h264_write_raw_frames(rtmp, (char*) data, size, pts, pts);
-			if (ret != 0) {
-				if (srs_h264_is_dvbsp_error(ret)) {
-					envir() << *fSource << "ignore drop video error, code=" << ret << "\n";
-				} else if (srs_h264_is_duplicated_sps_error(ret)) {
-					envir() << *fSource << "ignore duplicated sps, code=" << ret << "\n";
-				} else if (srs_h264_is_duplicated_pps_error(ret)) {
-					envir() << *fSource << "ignore duplicated pps, code=" << ret << "\n";
-				} else {
-					envir() << *fSource << "send h264 raw data failed. code=" << ret << "\n";
-					break;
-				}
-			}
-#ifdef DEBUG
-			u_int8_t nut = data[4] & 0x1F;
-			envir() << *fSource << "sent packet: type=video" << ", time=" << pts
-			<< ", size=" << size << ", b[4]="
-			<< (unsigned char*) data[4] << "("
-			<< (isSPS(nut) ? "SPS" : (isPPS(nut) ? "PPS" : (isIDR(nut) ? "I" : (isNonIDR(nut) ? "P" : "Unknown"))))
-			<< ")\n";
-#endif
-		}
-		return True;
-	} while (0);
-
-	Medium::close(this);
-	return False;
-}
-
-Boolean ourRTMPClient::sendAACFramePacket(u_int8_t* data, unsigned size, u_int32_t pts, u_int8_t sound_size, u_int8_t sound_type) {
-	do {
-		if (NULL != data && size > 0) {
-			//sound_format:   0 = Linear PCM, platform endian
-	        //				  1 = ADPCM
-	        //                2 = MP3
-	        //                7 = G.711 A-law logarithmic PCM
-	        //                8 = G.711 mu-law logarithmic PCM
-	        //                10 = AAC
-	        //                11 = Speex
-			char sound_format = 10;
-			//sound_rate: 0 = 5.5kHz(?auto)  1 = 11kHz 2 = 22kHz 3 = 44kHz
-			char sound_rate = 0;
-			//sound_size: 0 = 8-bit samples  1 = 16-bit samples
-			//sound_type: 0 = Mono sound  1 = Stereo sound
-			int ret = srs_audio_write_raw_frame(rtmp, sound_format, sound_rate, sound_size, sound_type, (char*) data, size, pts);
-			if (ret != 0) {
-				envir() << *fSource << "send audio raw data failed. code=" << ret << "\n";
-			}
-#ifdef DEBUG
-		envir() << *fSource << "sent packet: type=audio" << ", time=" << pts
-			<< ", size=" << size << ", codec=" << sound_format << ", rate=" << sound_rate
-			<< ", sample=" << sound_size << ", channel=" << sound_type << "\n";
-#endif
-		}
-		return True;
-	} while (0);
-
-	Medium::close(this);
-	return False;
 }
 
 //Implementation of "StreamClientState":
@@ -485,47 +328,41 @@ DummySink* DummySink::createNew(UsageEnvironment& env, MediaSubsession& subsessi
 }
 
 DummySink::DummySink(UsageEnvironment& env, MediaSubsession& subsession, char const* streamId)
-	: MediaSink(env), fClient(NULL), fSps(NULL), fPps(NULL), fSpsSize(0), fPpsSize(0),
-	  fSubsession(subsession), fWidth(640), fHeight(480), fFps(0), fPtsOffset(0), fIdrOffset(0),
-	  aacEncHandle(NULL), fAACBuffer(NULL) {
+	: MediaSink(env), fSps(NULL), fPps(NULL), fSpsSize(0), fPpsSize(0), fBufferSize(100000),
+	  fSubsession(subsession), fWidth(0), fHeight(0), fFps(0), fPtsOffset(0), fIdrOffset(0),
+	  fWaitFirstFrameFlag(True), aacEncHandle(NULL), fAACBuffer(NULL) {
 	fStreamId = strDup(streamId);
-	fBufferSize = fWidth * fHeight * 2 / 8;
-	fReceiveBuffer = new u_int8_t[fBufferSize];
 
 	if (strcasecmp(fSubsession.mediumName(), "audio") == 0) {
 		unsigned nPCMBitSize = 16;
-		DWORD nMaxInputBytes = 1024 * fSubsession.numChannels() * nPCMBitSize / 8;
-		DWORD nMaxOutputBytes = (6144/8) * fSubsession.numChannels();
-		if (strcasecmp(fSubsession.codecName(), "MPEG4-GENERIC") == 0
-				|| strcasecmp(fSubsession.codecName(), "MPA") == 0) {
-			setBufferSize(nMaxInputBytes);
-			fAACBuffer = new BYTE[nMaxOutputBytes];
-		} else {
-			switch(fSubsession.rtpPayloadFormat()) {
-				case 0:	//PCMU
-				case 8:	//PCMA
-				case 2: //G726-32
-					InitParam initParam;
-					initParam.u32AudioSamplerate = fSubsession.rtpTimestampFrequency();
-					initParam.ucAudioChannel = fSubsession.numChannels();
-					initParam.u32PCMBitSize = nPCMBitSize;
-					initParam.ucAudioCodec = fSubsession.rtpPayloadFormat() == 0 ? Law_ULaw :
-							fSubsession.rtpPayloadFormat() == 8 ? Law_ALaw : Law_G726;
-					if (initParam.ucAudioCodec == Law_G726) {
-						initParam.g726param.ucRateBits = Rate16kBits;
-					}
+		fBufferSize = 1024 * fSubsession.numChannels() * nPCMBitSize / 8;
+		unsigned nMaxOutputBytes = (6144 / 8) * fSubsession.numChannels();
 
-					aacEncHandle = Easy_AACEncoder_Init(initParam);
-					if (aacEncHandle != NULL) {
-						setBufferSize(nMaxInputBytes);
-						fAACBuffer = new BYTE[nMaxOutputBytes];
-					}
-					break;
-				default:
-					break;
+		if (strcasecmp(fSubsession.codecName(), "MPA") == 0
+				|| (strcasecmp(fSubsession.codecName(), "MPEG4-GENERIC") == 0
+						&& strcasecmp(fSubsession.attrVal_str("mode"), "AAC-hbr") == 0)) {
+			fAACBuffer = new BYTE[nMaxOutputBytes];
+		} else if (strcasecmp(fSubsession.codecName(), "PCMU") == 0
+				|| strcasecmp(fSubsession.codecName(), "PCMA") == 0
+				|| strcmp(fSubsession.codecName(), "G726") == 0) {
+			InitParam initParam;
+			initParam.u32AudioSamplerate = fSubsession.rtpTimestampFrequency();
+			initParam.ucAudioChannel = fSubsession.numChannels();
+			initParam.u32PCMBitSize = nPCMBitSize;
+			initParam.ucAudioCodec = fSubsession.rtpPayloadFormat() == 0 ? Law_ULaw :
+					fSubsession.rtpPayloadFormat() == 8 ? Law_ALaw : Law_G726;
+			if (initParam.ucAudioCodec == Law_G726) {
+				initParam.g726param.ucRateBits = Rate16kBits;
+			}
+
+			aacEncHandle = Easy_AACEncoder_Init(initParam);
+			if (aacEncHandle != NULL) {
+				fAACBuffer = new BYTE[nMaxOutputBytes];
 			}
 		}
 	}
+
+	fReceiveBuffer = new u_int8_t[fBufferSize];
 }
 
 DummySink::~DummySink() {
@@ -533,10 +370,8 @@ DummySink::~DummySink() {
 	delete[] fPps;
 	delete[] fReceiveBuffer;
 	delete[] fStreamId;
-	if (aacEncHandle != NULL) {
-		Easy_AACEncoder_Release(aacEncHandle);
-		delete[] fAACBuffer;
-	}
+	delete[] fAACBuffer;
+	Easy_AACEncoder_Release(aacEncHandle);
 }
 
 void DummySink::afterGettingFrame(void* clientData, unsigned frameSize,
@@ -555,44 +390,42 @@ void DummySink::afterGettingFrame(unsigned frameSize, unsigned numTruncatedBytes
 	if (rtspClient->publisher == NULL)
 		goto RECONNECT;
 
-	fClient = rtspClient->publisher;
-
 	u_int32_t pts;
 
 	if (strcasecmp(fSubsession.mediumName(), "video") == 0) {
 		if (strcasecmp(fSubsession.codecName(), "H264") == 0) {
 			u_int8_t nal_unit_type = fReceiveBuffer[4] & 0x1F; //0xFF;
-			if (fClient->fWaitFirstFrameFlag) {
+			if (fWaitFirstFrameFlag) {
 				if (isSPS(nal_unit_type)) {
 					parseSpsPacket(fReceiveBuffer+4, frameSize);
 				} else if (isPPS(nal_unit_type)) {
 					parsePpsPacket(fReceiveBuffer+4, frameSize);
 				} else if (isIDR(nal_unit_type)) {
-					if (!fClient->sendH264FramePacket(fSps, fSpsSize, 0))
+					if (!rtspClient->publisher->sendH264FramePacket(fSps, fSpsSize, 0))
 						goto RECONNECT;
 
-					if (!fClient->sendH264FramePacket(fPps, fPpsSize, 0))
+					if (!rtspClient->publisher->sendH264FramePacket(fPps, fPpsSize, 0))
 						goto RECONNECT;
 
 					checkComplexIDRFrame();
 
-					if (!fClient->sendH264FramePacket(fReceiveBuffer+fIdrOffset, frameSize+4-fIdrOffset, 0))
+					if (!rtspClient->publisher->sendH264FramePacket(fReceiveBuffer+fIdrOffset, frameSize+4-fIdrOffset, 0))
 						goto RECONNECT;
 
-					fClient->fWaitFirstFrameFlag = False;
+					fWaitFirstFrameFlag = False;
 				}
 			} else {
 				pts = fSubsession.getNormalPlayTime(presentationTime) * 1000;
 				if (isIDR(nal_unit_type)) {
-					if (!fClient->sendH264FramePacket(fReceiveBuffer+fIdrOffset, frameSize+4-fIdrOffset, pts))
+					if (!rtspClient->publisher->sendH264FramePacket(fReceiveBuffer+fIdrOffset, frameSize+4-fIdrOffset, pts))
 						goto RECONNECT;
 				} else if (isNonIDR(nal_unit_type)) {
-					if (!fClient->sendH264FramePacket(fReceiveBuffer, frameSize+4, pts))
+					if (!rtspClient->publisher->sendH264FramePacket(fReceiveBuffer, frameSize+4, pts))
 						goto RECONNECT;
 				}
 			}
 		}
-	} else if (strcasecmp(fSubsession.mediumName(), "audio") == 0 && !fClient->fWaitFirstFrameFlag) {
+	} else if (strcasecmp(fSubsession.mediumName(), "audio") == 0) {
 		if (fAACBuffer != NULL) {
 			unsigned out_size;
 			if (aacEncHandle != NULL) { //g711uLaw  g711alaw g726
@@ -609,9 +442,8 @@ void DummySink::afterGettingFrame(unsigned frameSize, unsigned numTruncatedBytes
 					out_size = frameSize;
 				}
 			}
-
 			pts = fSubsession.getNormalPlayTime(presentationTime) * 1000;
-			if (!fClient->sendAACFramePacket(fAACBuffer, out_size, pts, 1, fSubsession.numChannels()-1))
+			if (!rtspClient->publisher->sendAACFramePacket(fAACBuffer, out_size, pts, 1, fSubsession.numChannels()-1))
 				goto RECONNECT;
 		}
 	}
@@ -907,6 +739,82 @@ void shutdownStream(RTSPClient* rtspClient, int exitCode) {
 	}
 
 	Medium::close(rtspClient);
+}
+
+cJSON* loadConfigFile(char const* path) {
+	FILE *f;
+	if((f = fopen(path,"rb")) == NULL)
+		return NULL;
+
+	cJSON* json = NULL;
+	fseek(f,0,SEEK_END);
+	long len = ftell(f);
+	fseek(f,0,SEEK_SET);
+	char* data = (char*)malloc(len+1);
+	if (fread(data,1,len,f) == (size_t)len) {
+		data[len]='\0';
+		json = cJSON_Parse(data);
+	}
+	free(data);
+	fclose(f);
+	return json;
+}
+
+CP_ARRAY parseConfData(cJSON* conf) {
+	CP_ARRAY rval;
+	char const* expire = "-1";
+
+	int iCount = cJSON_GetArraySize(conf);
+	for (int i = 0; i < iCount; ++i) {
+		cJSON* pItem = cJSON_GetArrayItem(conf, i);
+		if (NULL == pItem)
+			continue;
+
+		cJSON* enable = cJSON_GetObjectItem(pItem, "enable");
+		if (enable != NULL && enable->valueint == 0)
+			continue;
+
+		cJSON* rtspUrl = cJSON_GetObjectItem(pItem, "rtspUrl");
+		cJSON* rtspUsername = cJSON_GetObjectItem(pItem, "rtspUsername");
+		cJSON* rtspPassword = cJSON_GetObjectItem(pItem, "rtspPassword");
+		cJSON* rtspUseTcp = cJSON_GetObjectItem(pItem, "rtspUseTcp");
+		cJSON* endpoint = cJSON_GetObjectItem(pItem, "endpoint");
+		cJSON* stream = cJSON_GetObjectItem(pItem, "stream");
+		cJSON* password = cJSON_GetObjectItem(pItem, "password");
+		cJSON* audioTrack = cJSON_GetObjectItem(pItem, "audioTrack");
+
+		if (NULL != rtspUrl && NULL != endpoint) {
+			conn_item_params_t params;
+			params.srcStreamURL = strDup(rtspUrl->valuestring);
+			params.rtspAUTH = new Authenticator();
+			if (rtspUsername != NULL && rtspPassword != NULL) {
+				params.rtspAUTH->setUsernameAndPassword(strDup(rtspUsername->valuestring), strDup(rtspPassword->valuestring));
+			}
+			params.rtspUseTcp = (rtspUseTcp != NULL) ? rtspUseTcp->valueint == 1 : False;
+			params.audioTrack = (audioTrack != NULL) ? audioTrack->valueint == 1 : False;
+
+			char rtmpUrl[255] = {0};
+			//rtmp://host:port/app[?nonce=x&token=y]/stream
+			sprintf(rtmpUrl, "%s", endpoint->valuestring);
+			if (NULL != password && strlen(password->valuestring) > 0) {
+				long nonce = our_random();
+				char token[64] = {0}, md5[33] = {0};
+				sprintf(token, "%ld%s%s", nonce, password->valuestring, expire);
+				our_MD5Data((unsigned char*)token, strlen(token), md5);
+				sprintf(rtmpUrl, "%s?token=%s%ld", rtmpUrl, md5, nonce);
+			}
+
+			if (stream != NULL) {
+				sprintf(rtmpUrl, "%s/%s", rtmpUrl, stream->valuestring);
+			} else {
+				sprintf(rtmpUrl, "%s/ch%d", rtmpUrl, i);
+			}
+
+			params.destStreamURL = strDup(rtmpUrl);
+			rval.push_back(params);
+		}
+	}
+	return rval;
 }
 
 void usage(UsageEnvironment& env) {

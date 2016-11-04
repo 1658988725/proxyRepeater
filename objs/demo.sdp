@@ -1,0 +1,12 @@
+v=0
+a=control:*
+m=video 0 RTP/AVP 97
+a=rtpmap:97 H264/90000
+a=control:trackID=1
+a=fmtp:97 src=objs/ad.264
+a=x-dimensions:1280,720
+a=x-framerate: 25
+m=audio 0 RTP/AVP 14
+a=rtpmap:14 MPA/44100/2
+a=control:trackID=2
+a=fmtp:14 src=objs/demo.aac

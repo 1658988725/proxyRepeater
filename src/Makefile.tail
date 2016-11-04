@@ -12,7 +12,7 @@ CODEC_INC = -I$(CODEC)/include
 CODEC_LIB = $(CODEC)/libEasyAACEncoder-$(GYP_TARGET_ARCH).a
 
 INCLUDES = $(LIVE555_INC) $(SRS_INC) $(CODEC_INC)
-LIBS = cJSON.$(OBJ) $(LIVE555_LIB) $(SRS_LIB) $(CODEC_LIB) -lpthread
+LIBS = cJSON.$(OBJ) spsDecode.$(OBJ) $(LIVE555_LIB) $(SRS_LIB) $(CODEC_LIB)
 
 PROGS = rtmpPusher streamCasterPusher
 
