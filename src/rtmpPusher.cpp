@@ -481,12 +481,6 @@ void continueAfterDESCRIBE(RTSPClient* rtspClient, int resultCode, char* resultS
 			break;
 		}
 
-		if (strstr(resultString, "m=video") == NULL) {
-			env << *rtspClient << "Not found video by SDP description (i.e., no \"m=video\" lines)\n";
-			delete[] resultString;
-			break;
-		}
-
 		char const* sdpDescription = resultString;
 #ifdef DEBUG
 		env << *rtspClient << "Got a SDP description:\n" << sdpDescription << "\n";
