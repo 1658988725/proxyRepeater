@@ -457,6 +457,7 @@ void DummySink::afterGettingFrame(unsigned frameSize, unsigned numTruncatedBytes
 	goto NEXT_FRAME;
 
 RECONNECT:
+	fWaitFirstFrameFlag = True;
 	ourRTMPClient::createNew(envir(),rtspClient);
 NEXT_FRAME:
 	continuePlaying();

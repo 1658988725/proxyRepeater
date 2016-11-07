@@ -91,6 +91,7 @@ public:
 				if (ret != 0) {
 					if (srs_h264_is_dvbsp_error(ret)) {
 						envir() << "[URL:\"" << fUrl << "\"]: " << "ignore drop video error, code=" << ret << "\n";
+						break;
 					} else if (srs_h264_is_duplicated_sps_error(ret)) {
 						envir() << "[URL:\"" << fUrl << "\"]: " << "ignore duplicated sps, code=" << ret << "\n";
 					} else if (srs_h264_is_duplicated_pps_error(ret)) {

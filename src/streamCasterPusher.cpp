@@ -305,6 +305,7 @@ void DummySink::afterGettingFrame(unsigned frameSize, unsigned numTruncatedBytes
 	}
 
 RECONNECT:
+	fWaitFirstFrameFlag = True;
 	rtmpClient = ourRTMPClient::createNew(envir(), fStreamId);
 NEXT_FRAME:
 	continuePlaying();
