@@ -1,5 +1,5 @@
-CROSS_TOOLCHAIN ?= /home/zhongkui/raspberry/arm-bcm2708/gcc-linaro-arm-linux-gnueabihf-raspbian-x64/bin
-CROSS_COMPILE = $(CROSS_TOOLCHAIN)/arm-linux-gnueabihf-
+CROSS_TOOLCHAIN ?= /opt/FriendlyARM/toolchain/4.9.3/bin
+CROSS_COMPILE = $(CROSS_TOOLCHAIN)/arm-none-linux-gnueabihf-
 
 COMPILE_OPTS =  $(INCLUDES) -fPIC -I. -O2 -DSOCKLEN_T=socklen_t -DLOCALE_NOT_USED -DNO_SSTREAM=1 -D_LARGEFILE_SOURCE=1 -D_FILE_OFFSET_BITS=64
 C =			c
@@ -26,5 +26,5 @@ CXX = $(CPLUSPLUS_COMPILER)
 AR = $(CROSS_COMPILE)ar
 CXXFLAGS = -ansi -Wall -g -O0 -fPIC
       
-GYP_TARGET_ARCH = rpi
+GYP_TARGET_ARCH = neo
 

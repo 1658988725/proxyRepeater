@@ -44,9 +44,12 @@ if [ ! -d  $PRO_DIR/objs ]; then
 fi
 
 if [ ! -d  $PRO_DIR/live555 ]; then
-    git clone https://github.com/xanview/live555.git
+    wget http://www.live555.com/liveMedia/public/live555-latest.tar.gz
+    tar zxvf live555-latest.tar.gz && mv live live555 && rm -rf live555-latest.tar.gz
     cp config.rpi ./live555/config.armlinux-gnueabihf
     cp config.openwrt ./live555/config.mipsel-openwrt-linux
+    cp config.neo ./live555/config.nanopi-neo
+    #cp -f hack/GroupsockHelper.cpp ./live555/groupsock/GroupsockHelper.cpp
 fi
 
 if [ ! -d  $PRO_DIR/srs-librtmp ]; then

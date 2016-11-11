@@ -12,6 +12,8 @@
 #include "ourMD5.hh"
 #include "spsDecode.h"
 
+//#define DEBUG
+
 #define CHECK_ALIVE_TASK_TIMER_INTERVAL 5*1000*1000
 
 #define RECONNECT_WAIT_DELAY(n) if (n >= 3) { usleep(CHECK_ALIVE_TASK_TIMER_INTERVAL); n = 0; }
