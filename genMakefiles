@@ -49,7 +49,7 @@ if [ ! -d  $PRO_DIR/live555 ]; then
     cp config.rpi ./live555/config.armlinux-gnueabihf
     cp config.openwrt ./live555/config.mipsel-openwrt-linux
     cp config.neo ./live555/config.nanopi-neo
-    #cp -f hack/GroupsockHelper.cpp ./live555/groupsock/GroupsockHelper.cpp
+    patch -p0 < patches/live555.patch
 fi
 
 if [ ! -d  $PRO_DIR/srs-librtmp ]; then

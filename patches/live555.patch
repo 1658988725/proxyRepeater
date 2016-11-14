@@ -1,0 +1,24 @@
+--- live555/groupsock/GroupsockHelper.cpp	2016-11-14 14:26:38.091347436 +0800
+@@ -117,14 +117,14 @@
+ #if defined(__WIN32__) || defined(_WIN32)
+   // Windoze doesn't properly handle SO_REUSEPORT or IP_MULTICAST_LOOP
+ #else
+-#ifdef SO_REUSEPORT
+-  if (setsockopt(newSocket, SOL_SOCKET, SO_REUSEPORT,
+-		 (const char*)&reuseFlag, sizeof reuseFlag) < 0) {
+-    socketErr(env, "setsockopt(SO_REUSEPORT) error: ");
+-    closeSocket(newSocket);
+-    return -1;
+-  }
+-#endif
++//#ifdef SO_REUSEPORT
++//  if (setsockopt(newSocket, SOL_SOCKET, SO_REUSEPORT,
++//		 (const char*)&reuseFlag, sizeof reuseFlag) < 0) {
++//    socketErr(env, "setsockopt(SO_REUSEPORT) error: ");
++//    closeSocket(newSocket);
++//    return -1;
++//  }
++//#endif
+ 
+ #ifdef IP_MULTICAST_LOOP
+   const u_int8_t loop = 1;
