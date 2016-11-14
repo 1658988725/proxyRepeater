@@ -3,8 +3,10 @@
     git clone https://github.com/aesirteam/proxyRepeater.git
     cd ./proxyRepeater
     chmod +x genMakefiles
-    //Generic linux x86_64
-       ./genMakefiles linux-x64
+###
+    Generic linux x86_64
+    ./genMakefiles linux-x64
+###
     make -j4
 #Run Program
 ###
