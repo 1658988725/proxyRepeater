@@ -338,7 +338,7 @@ DummySink::DummySink(UsageEnvironment& env, MediaSubsession& subsession, char co
 		fWidth = VIDEO_MIN_WIDTH;
 		fHeight = VIDEO_MIN_HEIGHT;
 		fFps = VIDEO_DEFAULT_FPS;
-		fBufferSize = fWidth * fHeight * 2 / 8;
+		fBufferSize = fWidth * fHeight / 2;
 	} else if (strcasecmp(fSubsession.mediumName(), "audio") == 0) {
 		unsigned nPCMBitSize = 16;
 		fBufferSize = 1024 * fSubsession.numChannels() * nPCMBitSize / 8;

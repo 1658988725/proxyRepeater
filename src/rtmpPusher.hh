@@ -241,7 +241,7 @@ public:
 		h264_decode_sps(data, size, width, height, fps);
 		if ((width > VIDEO_MIN_WIDTH && width >= fWidth)
 				|| (height > VIDEO_MIN_HEIGHT && height >= fHeight)) {
-			fBufferSize = (fWidth = width) * (fHeight = height) * 2 / 8;
+			fBufferSize = (fWidth = width) * (fHeight = height) / 2;
 			delete[] fReceiveBuffer;
 			fReceiveBuffer = new u_int8_t[fBufferSize];
 		}
