@@ -5,30 +5,39 @@ usage() {
     exit 1
 }
 
-check_require() {
-	if  hash gcc 2>/dev/null; then
-    	echo 'gcc:' `gcc -dumpversion`
+arch=$1
+
+check_ct() {
+	if [ "$arch" = "linux-x64" -o "$arch" = "linux" ]; then
+		if  hash gcc 2>/dev/null; then
+    		echo 'compiler: gcc ' `gcc -dumpversion`
+		else
+			echo 'Not found gcc compile, exit.'
+	    	exit 1
+		fi
+	elif [ "$arch" = "openwrt" ]; then
+		if  hash mipsel-openwrt-linux-gcc 2>/dev/null; then
+    		echo 'compiler: mipsel-openwrt-linux-gcc ' `mipsel-openwrt-linux-gcc -dumpversion`
+		else
+			echo 'Not found mipsel-openwrt-linux-gcc compile, exit.'
+	    	exit 1
+		fi
+	elif [ "$arch" = "rpi" ]; then
+		if  hash arm-linux-gnueabihf-gcc 2>/dev/null; then
+    		echo 'compiler: arm-linux-gnueabihf-gcc ' `arm-linux-gnueabihf-gcc -dumpversion`
+		else
+			echo 'Not found arm-linux-gnueabihf-gcc compile, exit.'
+	    	exit 1
+		fi
+	elif [ "$arch" = "neo" ]; then
+		if  hash arm-none-linux-gnueabihf-gcc 2>/dev/null; then
+    		echo 'compiler: arm-none-linux-gnueabihf-gcc ' `arm-none-linux-gnueabihf-gcc -dumpversion`
+		else
+			echo 'Not found arm-none-linux-gnueabihf-gcc compile, exit.'
+	    	exit 1
+		fi
 	else
-		echo 'Not found C compile, exit.'
-	    exit 1
-	fi
-	
-	if  hash node 2>/dev/null; then
-	    echo 'node:' `node -v`
-	else
-	    sudo apt-get install nodejs
-	fi
-	
-	if  hash npm 2>/dev/null; then
-	    echo 'npm:' `npm -v`
-	else
-	    apt-get install npm
-	fi
-	
-	if  hash node-gyp 2>/dev/null; then
-	    echo 'node-gyp:' `node-gyp -v`
-	else
-	    npm install nan node-gyp -g
+		exit 1
 	fi
 }
 
@@ -36,7 +45,8 @@ if [ $# -ne 1 ]; then
     usage $*
 fi
 
-check_require
+echo 'os target:' `uname -sri`
+check_ct
 
 PRO_DIR=$(pwd)
 if [ ! -d  $PRO_DIR/objs ]; then
@@ -85,9 +95,5 @@ rm -f Makefile
 cat Makefile.head config.$1 Makefile.tail > Makefile
 
 cd src
-rm -f Makefile
-cat $PRO_DIR/config.$1 Makefile.tail > Makefile
-
-cd $PRO_DIR/node-gyp
 rm -f Makefile
 cat $PRO_DIR/config.$1 Makefile.tail > Makefile

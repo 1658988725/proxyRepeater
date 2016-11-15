@@ -15,9 +15,6 @@ all:
 	cd $(BASIC_USAGE_ENVIRONMENT_DIR); $(MAKE)
 	cd $(SRS_LIBRTMP_DIR); $(MAKE)
 	cd src; $(MAKE)
-
-node: all
-	cd node-gyp; $(MAKE)
 	
 distclean: clean
 	-rm -rf $(LIVE555_DIR) \
@@ -33,4 +30,3 @@ clean:
 	cd $(BASIC_USAGE_ENVIRONMENT_DIR); $(MAKE) clean
 	cd $(SRS_LIBRTMP_DIR); $(MAKE) clean
 	cd src; $(MAKE) clean
-	cd node-gyp; $(MAKE) clean

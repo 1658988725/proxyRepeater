@@ -4,7 +4,7 @@ C_COMPILER =		cc
 C_FLAGS =		$(COMPILE_OPTS)
 CPP =			cpp
 CPLUSPLUS_COMPILER =	c++
-CPLUSPLUS_FLAGS =	$(COMPILE_OPTS) -Wall -DBSD=1
+CPLUSPLUS_FLAGS =	$(COMPILE_OPTS) -Wall -DBSD=1 -Wno-int-to-pointer-cast
 OBJ =			o
 LINK =			c++ -o
 LINK_OPTS =		-L. $(LDFLAGS)
@@ -22,7 +22,7 @@ GCC = $(C_COMPILER)
 CXX = $(CPLUSPLUS_COMPILER)
 AR = ar
 LINK = $(CPLUSPLUS_COMPILER)
-CXXFLAGS = -m32 -ansi -Wall -g -O0 -fPIC
+CXXFLAGS = -m32 -ansi -Wall -O2 -fPIC
 
 GYP_TARGET_ARCH = ia32
 

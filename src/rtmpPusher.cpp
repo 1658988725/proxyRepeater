@@ -2,15 +2,6 @@
 #include "rtmpPusher.hh"
 #include <vector>
 
-#ifdef NODE_V8_ADDON
-#include <node.h>
-#include <node_version.h>
-#include <v8.h>
-#if NODE_MAJOR_VERSION == 0 && NODE_MINOR_VERSION == 12
-#define NODE_VERSION_12		1
-#endif
-#endif
-
 using namespace std;
 
 typedef std::vector<conn_item_params_t>  CP_ARRAY;
@@ -53,7 +44,6 @@ void openURL(void* args) {
 	rtspClient->sendDescribeCommand(continueAfterDESCRIBE, params->rtspAUTH);
 }
 
-#ifndef NODE_V8_ADDON
 int main(int argc, char** argv) {
 	TaskScheduler* scheduler = BasicTaskScheduler::createNew();
 	thatEnv = BasicUsageEnvironment::createNew(*scheduler);
@@ -112,123 +102,6 @@ DONE:
 	thatEnv->taskScheduler().doEventLoop(&eventLoopWatchVariable);
 	return 0;
 }
-#else //Build NODE_V8_ADDON
-
-#ifdef NODE_VERSION_12
-void InitMethod(const v8::FunctionCallbackInfo<v8::Value>& args) {
-	v8::Isolate* isolate = v8::Isolate::GetCurrent();
-	v8::HandleScope scope(isolate);
-#else
-v8::Handle<v8::Value> InitMethod(const v8::Arguments& args) {
-	v8::HandleScope scope;
-#endif
-
-	if (args.Length() < 1) {
-#ifdef NODE_VERSION_12
-		isolate->ThrowException(v8::Exception::Error(v8::String::NewFromUtf8(isolate, "Wrong arguments")));
-		return;
-#else
-		v8::ThrowException(v8::Exception::Error(v8::String::New("Wrong arguments")));
-	    return scope.Close(v8::Undefined());
-#endif
-	}
-
-	if(!args[0]->IsString()) {
-#ifdef NODE_VERSION_12
-		isolate->ThrowException(v8::Exception::TypeError(v8::String::NewFromUtf8(isolate, "Arguments[0] not string type")));
-		return;
-#else
-		v8::ThrowException(v8::Exception::TypeError(v8::String::New("Arguments[0] not string type")));
-	    return scope.Close(v8::Undefined());
-#endif
-	}
-
-	if(!args[1]->IsFunction()) {
-#ifdef NODE_VERSION_12
-		isolate->ThrowException(v8::Exception::TypeError(v8::String::NewFromUtf8(isolate, "Arguments[1] not function type")));
-		return;
-#else
-	    ThrowException(v8::Exception::TypeError(v8::String::New("Arguments[1] not function type")));
-	    return scope.Close(v8::Undefined());
-#endif
-	}
-
-	v8::Local<v8::Function> cb = v8::Local<v8::Function>::Cast(args[1]);
-	v8::String::Utf8Value str(args[0]);
-	const unsigned argc = 2;
-	cJSON* conf = cJSON_Parse(*str);
-	if(!conf) {
-#ifdef NODE_VERSION_12
-		v8::Local<v8::Value> argv[argc] = { v8::Boolean::New(isolate, True), v8::String::NewFromUtf8(isolate, "Json data parse fail.") };
-		cb->Call(isolate->GetCurrentContext()->Global(), argc, argv);
-		return;
-#else
-		Local<v8::Value> argv[argc] = { v8::Local<v8::Value>::New(v8::Boolean::New(True)) , v8::Local<v8::Value>::New(v8::String::New("Json data parse fail.")) };
-	    cb->Call(Context::GetCurrent()->Global(), argc, argv);
-	    return scope.Close(v8::Undefined());
-#endif
-	}
-	if(parseConfData(conf) == 0) {
-#ifdef NODE_VERSION_12
-		v8::Local<v8::Value> argv[argc] = { v8::Boolean::New(isolate, True), v8::String::NewFromUtf8(isolate, "Json data not exists.") };
-		cb->Call(isolate->GetCurrentContext()->Global(), argc, argv);
-		return;
-#else
-		v8::Local<v8::Value> argv[argc] = { v8::Local<v8::Value>::New(v8::Boolean::New(True)), v8::Local<v8::Value>::New(v8::String::New("Json data not exists.")) };
-		cb->Call(Context::GetCurrent()->Global(), argc, argv);
-	    return scope.Close(v8::Undefined());
-#endif
-	}
-
-	unsigned delay = 100000;
-	for (CP_ARRAY::iterator it = items.begin(); it != items.end(); ++it) {
-		thatEnv->taskScheduler().scheduleDelayedTask(delay, (TaskFunc*)openURL, &(*it));
-		delay += delay;
-	}
-
-	cJSON_Delete(conf);
-	conf = NULL;
-
-#ifdef NODE_VERSION_12
-	v8::Local<v8::Value> argv[argc-1] = { v8::Boolean::New(isolate, False) };
-	cb->Call(isolate->GetCurrentContext()->Global(), argc-1, argv);
-#else
-	v8::Local<v8::Value> argv[argc-1] = { v8::Local<v8::Value>::New(v8::Boolean::New(False)) };
-	cb->Call(Context::GetCurrent()->Global(), argc-1, argv);
-	return scope.Close(Undefined());
-#endif
-}
-
-#ifdef NODE_VERSION_12
-void StartMethod(const v8::FunctionCallbackInfo<v8::Value>& args) {
-	v8::Isolate* isolate = v8::Isolate::GetCurrent();
-	v8::HandleScope scope(isolate);
-#else
-v8::Handle<v8::Value> StartMethod(const v8::Arguments& args) {
-	v8::HandleScope scope;
-#endif
-	thatEnv->taskScheduler().doEventLoop(&eventLoopWatchVariable);
-#ifndef NODE_VERSION_12
-	return scope.Close(v8::Undefined());
-#endif
-}
-
-void Init(v8::Handle<v8::Object> exports, v8::Handle<v8::Object> module) {
-	//OutPacketBuffer::maxSize = DUMMY_SINK_RECEIVE_BUFFER_SIZE;
-	TaskScheduler* scheduler = BasicTaskScheduler::createNew();
-	thatEnv = BasicUsageEnvironment::createNew(*scheduler);
-#ifdef NODE_VERSION_12
-	v8::Isolate* isolate = v8::Isolate::GetCurrent();
-	exports->Set(v8::String::NewFromUtf8(isolate, "init"), v8::FunctionTemplate::New(isolate, InitMethod)->GetFunction());
-	exports->Set(v8::String::NewFromUtf8(isolate, "start"), v8::FunctionTemplate::New(isolate, StartMethod)->GetFunction());
-#else
-	exports->Set(v8::String::NewSymbol("init"), v8::FunctionTemplate::New(InitMethod)->GetFunction());
-	exports->Set(v8::String::NewSymbol("start"), v8::FunctionTemplate::New(StartMethod)->GetFunction());
-#endif
-}
-
-NODE_MODULE(node_nvr_addon, Init);
-#endif
 
 #define RTSP_CLIENT_VERBOSITY_LEVEL 0
 #define TUNNEL_OVER_HTTP_PORTNUM 0
@@ -239,7 +112,7 @@ ourRTSPClient* ourRTSPClient::createNew(UsageEnvironment& env, conn_item_params_
 }
 
 ourRTSPClient::ourRTSPClient(UsageEnvironment& env, conn_item_params_t& params)
-	: RTSPClient(env, params.srcStreamURL, RTSP_CLIENT_VERBOSITY_LEVEL, "rtmpPusher", TUNNEL_OVER_HTTP_PORTNUM, -1),
+	: RTSPClient(env, params.srcStreamURL, RTSP_CLIENT_VERBOSITY_LEVEL, progName, TUNNEL_OVER_HTTP_PORTNUM, -1),
 	  publisher(NULL), fParams(params) {
 }
 
