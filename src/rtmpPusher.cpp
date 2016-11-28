@@ -207,6 +207,10 @@ DummySink::DummySink(UsageEnvironment& env, MediaSubsession& subsession, char co
 	  fSubsession(subsession), fWidth(0), fHeight(0), fFps(0), fPtsOffset(0), fIdrOffset(0),
 	  fWaitFirstFrameFlag(True), aacEncHandle(NULL), fAACBuffer(NULL) {
 	fStreamId = strDup(streamId);
+
+	gettimeofday(&timeNow, NULL);
+	fPtsOffset = u_int64_t(timeNow.tv_sec * 1000000 + timeNow.tv_usec);
+
 	if(strcasecmp(fSubsession.mediumName(), "video") == 0) {
 		fWidth = VIDEO_MIN_WIDTH;
 		fHeight = VIDEO_MIN_HEIGHT;
@@ -295,6 +299,12 @@ void DummySink::afterGettingFrame(unsigned frameSize, unsigned numTruncatedBytes
 				goto NEXT_FRAME;
 			} else {
 				pts = fSubsession.getNormalPlayTime(presentationTime) * 1000;
+
+				if (pts == 0) {
+					gettimeofday(&timeNow, NULL);
+					pts = (u_int64_t(timeNow.tv_sec * 1000000 + timeNow.tv_usec) - fPtsOffset) / 1000;
+				}
+
 				if (isIDR(nal_unit_type)) {
 					if (!rtspClient->publisher->sendH264FramePacket(fReceiveBuffer+fIdrOffset, frameSize+4-fIdrOffset, pts))
 						goto RECONNECT;
