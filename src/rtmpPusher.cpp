@@ -25,7 +25,6 @@ void usage(UsageEnvironment& env);
 
 CP_ARRAY items;
 char eventLoopWatchVariable = 0;
-Boolean runDaemonMode = False;
 unsigned rtspReconnectCount = 0, rtmpReconnectCount = 0;
 
 void openURL(void* args) {
@@ -79,14 +78,14 @@ int main(int argc, char** argv) {
 			}
 			break;
 		case 'd':
-			runDaemonMode = True;
+			runDebugMode = True;
 			break;
 		default:
 			usage(*thatEnv);
 			exit(0);
 		}
 	}
-
+/*
 	if (runDaemonMode) {
 		pid_t pid = fork();
 		if (pid < 0) {
@@ -97,8 +96,8 @@ int main(int argc, char** argv) {
 		else
 			exit(0);
 	}
-
 DONE:
+*/
 	thatEnv->taskScheduler().doEventLoop(&eventLoopWatchVariable);
 	return 0;
 }
@@ -117,9 +116,9 @@ ourRTSPClient::ourRTSPClient(UsageEnvironment& env, conn_item_params_t& params)
 }
 
 ourRTSPClient::~ourRTSPClient() {
-#ifdef DEBUG
-	envir() << *this << "Closed the rtspClient.\n";
-#endif
+	if(runDebugMode)
+		envir() << *this << "Closed the rtspClient.\n";
+
 	if (publisher != NULL) {
 		Medium::close(publisher);
 	}
@@ -143,25 +142,27 @@ ourRTMPClient::ourRTMPClient(UsageEnvironment& env, RTSPClient* rtspClient)
 			envir() << "[URL:\"" << fUrl << "\"]: " << "simple handshake failed." << "\n";
 			break;
 		}
-#ifdef DEBUG
-		envir() << *fSource <<"simple handshake success" << "\n";
-#endif
+
+		if(runDebugMode)
+			envir() << *fSource <<"simple handshake success" << "\n";
+
 		if (srs_rtmp_connect_app(rtmp) != 0) {
 			envir() << "[URL:\"" << fUrl << "\"]: " << "connect vhost/app failed." << "\n";
 			break;
 		}
-#ifdef DEBUG
-		envir() << "[URL:\"" << fUrl << "\"]: " <<"connect vhost/app success" << "\n";
-#endif
+
+		if(runDebugMode)
+			envir() << "[URL:\"" << fUrl << "\"]: " <<"connect vhost/app success" << "\n";
 
 		int ret = srs_rtmp_publish_stream(rtmp);
 		if (ret != 0) {
 			envir() << "[URL:\"" << fUrl << "\"]: " << "publish stream failed.(ret=" << ret << ")\n";
 			break;
 		}
-#ifdef DEBUG
-		envir() << *fSource << "publish stream success" << "\n";
-#endif
+
+		if(runDebugMode)
+			envir() << *fSource << "publish stream success" << "\n";
+
 		((ourRTSPClient*)fSource)->publisher = this;
 		env << "[URL:\"" << fUrl << "\"]: " << "\n\tPublish the stream from \"" << params.srcStreamURL << "\"\n";
 		rtmpReconnectCount = 0;
@@ -172,9 +173,9 @@ ourRTMPClient::ourRTMPClient(UsageEnvironment& env, RTSPClient* rtspClient)
 }
 
 ourRTMPClient::~ourRTMPClient() {
-#ifdef DEBUG
-	envir() << "[URL:\"" << fUrl << "\"]: " << "Cleanup when unpublish. rtmpClient disconnect peer" << "\n";
-#endif
+	if(runDebugMode)
+		envir() << "[URL:\"" << fUrl << "\"]: " << "Cleanup when unpublish. rtmpClient disconnect peer" << "\n";
+
 	srs_rtmp_destroy(rtmp);
 	rtmp = NULL;
 	((ourRTSPClient*)fSource)->publisher = NULL;
@@ -207,9 +208,6 @@ DummySink::DummySink(UsageEnvironment& env, MediaSubsession& subsession, char co
 	  fSubsession(subsession), fWidth(0), fHeight(0), fFps(0), fPtsOffset(0), fIdrOffset(0),
 	  fWaitFirstFrameFlag(True), aacEncHandle(NULL), fAACBuffer(NULL) {
 	fStreamId = strDup(streamId);
-
-	gettimeofday(&timeNow, NULL);
-	fPtsOffset = u_int64_t(timeNow.tv_sec * 1000000 + timeNow.tv_usec);
 
 	if(strcasecmp(fSubsession.mediumName(), "video") == 0) {
 		fWidth = VIDEO_MIN_WIDTH;
@@ -249,11 +247,11 @@ DummySink::DummySink(UsageEnvironment& env, MediaSubsession& subsession, char co
 }
 
 DummySink::~DummySink() {
-	delete[] fSps;
-	delete[] fPps;
-	delete[] fReceiveBuffer;
-	delete[] fStreamId;
-	delete[] fAACBuffer;
+	delete[] fSps; fSps = NULL;
+	delete[] fPps; fPps = NULL;
+	delete[] fReceiveBuffer; fReceiveBuffer = NULL;
+	delete[] fStreamId; fStreamId = NULL;
+	delete[] fAACBuffer; fAACBuffer = NULL;
 	Easy_AACEncoder_Release(aacEncHandle);
 }
 
@@ -298,11 +296,13 @@ void DummySink::afterGettingFrame(unsigned frameSize, unsigned numTruncatedBytes
 				}
 				goto NEXT_FRAME;
 			} else {
-				pts = fSubsession.getNormalPlayTime(presentationTime) * 1000;
-
-				if (pts == 0) {
-					gettimeofday(&timeNow, NULL);
-					pts = (u_int64_t(timeNow.tv_sec * 1000000 + timeNow.tv_usec) - fPtsOffset) / 1000;
+				if (fPtsOffset == 0.0) {
+					pts = fSubsession.getNormalPlayTime(presentationTime) * 1000;
+					if (pts == 0) {
+						fPtsOffset = u_int64_t(scs.gettingLastFrameTime.tv_sec * 1000000 + scs.gettingLastFrameTime.tv_usec);
+					}
+				} else {
+					pts = (u_int64_t(scs.gettingLastFrameTime.tv_sec * 1000000 + scs.gettingLastFrameTime.tv_usec) - fPtsOffset) / 1000;
 				}
 
 				if (isIDR(nal_unit_type)) {
@@ -314,7 +314,7 @@ void DummySink::afterGettingFrame(unsigned frameSize, unsigned numTruncatedBytes
 				}
 			}
 		}
-	} else if (strcasecmp(fSubsession.mediumName(), "audio") == 0) {
+	} else if (rtspClient->fParams.audioTrack && strcasecmp(fSubsession.mediumName(), "audio") == 0) {
 		if (fAACBuffer != NULL) {
 			unsigned out_size;
 			if (aacEncHandle != NULL) { //g711uLaw  g711alaw g726
@@ -331,7 +331,16 @@ void DummySink::afterGettingFrame(unsigned frameSize, unsigned numTruncatedBytes
 					out_size = frameSize;
 				}
 			}
-			pts = fSubsession.getNormalPlayTime(presentationTime) * 1000;
+
+			if (fPtsOffset == 0.0) {
+				pts = fSubsession.getNormalPlayTime(presentationTime) * 1000;
+				if (pts == 0) {
+					fPtsOffset = u_int64_t(scs.gettingLastFrameTime.tv_sec * 1000000 + scs.gettingLastFrameTime.tv_usec);
+				}
+			} else {
+				pts = (u_int64_t(scs.gettingLastFrameTime.tv_sec * 1000000 + scs.gettingLastFrameTime.tv_usec) - fPtsOffset) / 1000;
+			}
+
 			if (!rtspClient->publisher->sendAACFramePacket(fAACBuffer, out_size, pts, 1, fSubsession.numChannels()-1))
 				goto RECONNECT;
 
@@ -361,17 +370,17 @@ void continueAfterDESCRIBE(RTSPClient* rtspClient, int resultCode, char* resultS
 
 		if (resultCode != 0) {
 			env << *rtspClient << "Failed to get a SDP description: " << resultString << "\n";
-			delete[] resultString;
+			delete[] resultString; resultString= NULL;
 			break;
 		}
 
 		char const* sdpDescription = resultString;
-#ifdef DEBUG
-		env << *rtspClient << "Got a SDP description:\n" << sdpDescription << "\n";
-#endif
+		if(runDebugMode)
+			env << *rtspClient << "Got a SDP description:\n" << sdpDescription << "\n";
+
 		// Create a media session object from this SDP description:
 		scs.session = MediaSession::createNew(env, sdpDescription);
-		delete[] sdpDescription;
+		delete[] sdpDescription; sdpDescription = NULL;
 		if (scs.session == NULL) {
 			env << *rtspClient << "Failed to create a MediaSession object from the SDP description: " << env.getResultMsg() << "\n";
 			break;
@@ -396,25 +405,26 @@ void setupNextSubsession(RTSPClient* rtspClient) {
 
 	scs.subsession = scs.iter->next();
 	if (scs.subsession != NULL) {
+		/*
 		if ((!client->fParams.audioTrack && strcasecmp(scs.subsession->mediumName(), "audio") == 0)
 				|| strcasecmp(scs.subsession->codecName(), "VND.ONVIF.METADATA") == 0) {
 			setupNextSubsession(rtspClient);
 			return;
 		}
-
+		*/
 		if (!scs.subsession->initiate()) {
 			env << *rtspClient << "Failed to initiate the \"" << *scs.subsession << "\" subsession: " << env.getResultMsg() << "\n";
 			setupNextSubsession(rtspClient);
 		} else {
-#ifdef DEBUG
-			env << *rtspClient << "Initiated the \"" << *scs.subsession << "\" subsession (";
-			if (scs.subsession->rtcpIsMuxed()) {
-				env << "client port " << scs.subsession->clientPortNum();
-			} else {
-				env << "client ports " << scs.subsession->clientPortNum() << "-" << scs.subsession->clientPortNum() + 1;
+			if(runDebugMode) {
+				env << *rtspClient << "Initiated the \"" << *scs.subsession << "\" subsession (";
+				if (scs.subsession->rtcpIsMuxed()) {
+					env << "client port " << scs.subsession->clientPortNum();
+				} else {
+					env << "client ports " << scs.subsession->clientPortNum() << "-" << scs.subsession->clientPortNum() + 1;
+				}
+				env << ")\n";
 			}
-			env << ")\n";
-#endif
 			// By default, we request that the server stream its data using RTP/UDP.
 			// If, instead, you want to request that the server stream via RTP-over-TCP, change the following to True:
 			rtspClient->sendSetupCommand(*scs.subsession, continueAfterSETUP, False, client->fParams.rtspUseTcp);
@@ -441,15 +451,17 @@ void continueAfterSETUP(RTSPClient* rtspClient, int resultCode, char* resultStri
 			env << *rtspClient << "Failed to set up the \"" << *scs.subsession << "\" subsession: " << resultString << "\n";
 			break;
 		}
-#ifdef DEBUG
-		env << *rtspClient << "Set up the \"" << *scs.subsession << "\" subsession (";
-		if (scs.subsession->rtcpIsMuxed()) {
-			env << "client port " << scs.subsession->clientPortNum();
-		} else {
-			env << "client ports " << scs.subsession->clientPortNum() << "-" << scs.subsession->clientPortNum() + 1;
+
+		if(runDebugMode) {
+			env << *rtspClient << "Set up the \"" << *scs.subsession << "\" subsession (";
+			if (scs.subsession->rtcpIsMuxed()) {
+				env << "client port " << scs.subsession->clientPortNum();
+			} else {
+				env << "client ports " << scs.subsession->clientPortNum() << "-" << scs.subsession->clientPortNum() + 1;
+			}
+			env << ")\n";
 		}
-		env << ")\n";
-#endif
+
 		scs.subsession->sink = DummySink::createNew(env, *scs.subsession, rtspClient->url());
 		if (scs.subsession->sink == NULL) {
 			env << *rtspClient << "Failed to create a data sink for the \""
@@ -457,9 +469,9 @@ void continueAfterSETUP(RTSPClient* rtspClient, int resultCode, char* resultStri
 			break;
 		}
 
-#ifdef DEBUG
-		env << *rtspClient << "Created a data sink for the \"" << *scs.subsession << "\" subsession\n";
-#endif
+		if(runDebugMode)
+			env << *rtspClient << "Created a data sink for the \"" << *scs.subsession << "\" subsession\n";
+
 		scs.subsession->miscPtr = rtspClient;
 		DummySink* sink = (DummySink*) scs.subsession->sink;
 		if (strcasecmp(scs.subsession->mediumName(), "video") == 0
@@ -489,7 +501,7 @@ void continueAfterSETUP(RTSPClient* rtspClient, int resultCode, char* resultStri
 		success = True;
 	} while (0);
 
-	delete[] resultString;
+	delete[] resultString; resultString = NULL;
 
 	if (success)
 		setupNextSubsession(rtspClient);
@@ -516,22 +528,21 @@ void continueAfterPLAY(RTSPClient* rtspClient, int resultCode, char* resultStrin
 			unsigned uSecsToDelay = (unsigned) (scs.duration * 1000000);
 			scs.streamTimerTask = env.taskScheduler().scheduleDelayedTask(uSecsToDelay, (TaskFunc*) streamTimerHandler, rtspClient);
 		}
-#ifdef DEBUG
-		env << *rtspClient << "Started playing session";
-		if (scs.duration > 0) {
-			env << " (for up to " << scs.duration << " seconds)";
+
+		if(runDebugMode) {
+			env << *rtspClient << "Started playing session";
+			if (scs.duration > 0) {
+				env << " (for up to " << scs.duration << " seconds)";
+			}
+			env << "...\n";
 		}
-		env << "...\n";
-#endif
-
-
 
 		if (client->publisher == NULL) {
-#ifdef DEBUG
-			env << *rtspClient << "Start Creating ourRTMPClient ..." << "\n";
-#endif
+			if(runDebugMode)
+				env << *rtspClient << "Start Creating ourRTMPClient ..." << "\n";
+
 			if (ourRTMPClient::createNew(env, client) == NULL) {
-				env << *rtspClient << "\n\tPublish the failed. endpoint:\"" << client->fParams.destStreamURL << "\n";
+				env << *rtspClient << "\n\tPublish the failed. endpoint:\"" << client->fParams.destStreamURL << "\"\n";
 				break;
 			}
 		}
@@ -541,7 +552,7 @@ void continueAfterPLAY(RTSPClient* rtspClient, int resultCode, char* resultStrin
 		success = True;
 	} while (0);
 
-	delete[] resultString;
+	delete[] resultString; resultString = NULL;
 
 	if (!success) {
 		shutdownStream(rtspClient);
@@ -566,11 +577,11 @@ void subsessionAfterPlaying(void* clientData) {
 
 void subsessionByeHandler(void* clientData) {
 	MediaSubsession* subsession = (MediaSubsession*) clientData;
-#ifdef DEBUG
-	RTSPClient* rtspClient = (RTSPClient*)(subsession->miscPtr);
-	UsageEnvironment& env = rtspClient->envir();
-	env << *rtspClient << "Received RTCP \"BYE\" on \"" << *subsession << "\" subsession\n";
-#endif
+	if(runDebugMode){
+		RTSPClient* rtspClient = (RTSPClient*)(subsession->miscPtr);
+		UsageEnvironment& env = rtspClient->envir();
+		env << *rtspClient << "Received RTCP \"BYE\" on \"" << *subsession << "\" subsession\n";
+	}
 	subsessionAfterPlaying(subsession);
 }
 
@@ -678,21 +689,23 @@ CP_ARRAY parseConfData(cJSON* conf) {
 			params.rtspUseTcp = (rtspUseTcp != NULL) ? rtspUseTcp->valueint == 1 : False;
 			params.audioTrack = (audioTrack != NULL) ? audioTrack->valueint == 1 : False;
 
-			char rtmpUrl[255] = {0};
+			char rtmpUrl[255] = {0}, tmp[255] = {0};
+
 			//rtmp://host:port/app[?nonce=x&token=y]/stream
-			sprintf(rtmpUrl, "%s", endpoint->valuestring);
+			strcpy(rtmpUrl, endpoint->valuestring);
+
 			if (NULL != password && strlen(password->valuestring) > 0) {
 				long nonce = our_random();
 				char token[64] = {0}, md5[33] = {0};
 				sprintf(token, "%ld%s%s", nonce, password->valuestring, expire);
 				our_MD5Data((unsigned char*)token, strlen(token), md5);
-				sprintf(rtmpUrl, "%s?token=%s%ld", rtmpUrl, md5, nonce);
+				sprintf(tmp, "%s?token=%s%ld", rtmpUrl, md5, nonce);
 			}
 
-			if (stream != NULL) {
-				sprintf(rtmpUrl, "%s/%s", rtmpUrl, stream->valuestring);
+			if (NULL != stream && strlen(stream->valuestring) > 0) {
+				sprintf(rtmpUrl, "%s/%s", tmp, stream->valuestring);
 			} else {
-				sprintf(rtmpUrl, "%s/ch%d", rtmpUrl, i);
+				sprintf(rtmpUrl, "%s/ch%d", tmp, i);
 			}
 
 			params.destStreamURL = strDup(rtmpUrl);
@@ -706,5 +719,5 @@ void usage(UsageEnvironment& env) {
 	env << "Usage: " << progName << " -c <conf> [-d]\n";
 	env << "Options:" << "\n";
 	env << " -c: load config file" << "\n";
-	env << " -d: daemon mode" << "\n";
+	env << " -d: run debug mode" << "\n";
 }

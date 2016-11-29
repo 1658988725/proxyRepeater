@@ -325,16 +325,17 @@ ourRTMPClient::ourRTMPClient(UsageEnvironment& env, char const* rtmpUrl)
 			envir() << "[URL:\"" << fUrl << "\"]: " << "simple handshake failed." << "\n";
 			break;
 		}
-#ifdef DEBUG
-		envir() << "[URL:\"" << fUrl << "\"]: " << "simple handshake success" << "\n";
-#endif
+
+		if(runDebugMode)
+			envir() << "[URL:\"" << fUrl << "\"]: " << "simple handshake success" << "\n";
+
 		if (srs_rtmp_connect_app(rtmp) != 0) {
 			envir() << "[URL:\"" << fUrl << "\"]: " << "connect vhost/app failed." << "\n";
 			break;
 		}
-#ifdef DEBUG
-		envir() << "[URL:\"" << fUrl << "\"]: " << "connect vhost/app success" << "\n";
-#endif
+
+		if(runDebugMode)
+			envir() << "[URL:\"" << fUrl << "\"]: " << "connect vhost/app success" << "\n";
 
 		int ret = srs_rtmp_publish_stream(rtmp);
 		if (ret != 0) {

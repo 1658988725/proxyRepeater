@@ -7,6 +7,7 @@ CPLUSPLUS_COMPILER = c++
 CPLUSPLUS_FLAGS =	$(COMPILE_OPTS) -Wall -DBSD=1 -Wno-int-to-pointer-cast
 OBJ =			o
 LINK =			c++ -o
+#LINK_OPTS =	-L. -static-libstdc++
 LINK_OPTS =		-L.
 CONSOLE_LINK_OPTS =	$(LINK_OPTS)
 LIBRARY_LINK =		ar cr 

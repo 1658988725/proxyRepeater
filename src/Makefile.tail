@@ -12,7 +12,7 @@ CODEC_INC = -I$(CODEC)/include
 CODEC_LIB = $(CODEC)/libEasyAACEncoder-$(GYP_TARGET_ARCH).a
 
 INCLUDES = $(LIVE555_INC) $(SRS_INC) $(CODEC_INC)
-LIBS = cJSON.$(OBJ) spsDecode.$(OBJ) $(LIVE555_LIB) $(SRS_LIB) $(CODEC_LIB)
+LIBS = $(LIVE555_LIB) $(SRS_LIB) $(CODEC_LIB) cJSON.$(OBJ) spsDecode.$(OBJ)
 
 PROGS = rtmpPusher streamCasterPusher
 
@@ -21,16 +21,16 @@ PROGS = rtmpPusher streamCasterPusher
 all: $(PROGS)
 
 .$(C).$(OBJ) :
-	$(C_COMPILER) -c $(INCLUDES) $(C_FLAGS) $<
+	@$(C_COMPILER) -c $(INCLUDES) $(C_FLAGS) $<
 .$(CPP).$(OBJ) :
-	$(CPLUSPLUS_COMPILER) -c $(INCLUDES) $(CPLUSPLUS_FLAGS) $<
+	@$(CPLUSPLUS_COMPILER) -c $(INCLUDES) $(CPLUSPLUS_FLAGS) $<
 	
 rtmpPusher : rtmpPusher.$(OBJ) $(LIBS)
-	$(CPLUSPLUS_COMPILER) $(COMPILE_OPTS) -o ../objs/$@-$(GYP_TARGET_ARCH) $< $(LIBS)
+	$(CPLUSPLUS_COMPILER) -o ../objs/$@-$(GYP_TARGET_ARCH) $< $(LIBS) $(LINK_OPTS)
 	@$(STRIP) ../objs/$@-$(GYP_TARGET_ARCH)
 
 streamCasterPusher : streamCasterPusher.$(OBJ) $(LIBS)
-	$(CPLUSPLUS_COMPILER) $(COMPILE_OPTS) -o ../objs/$@-$(GYP_TARGET_ARCH) $< $(LIBS)
+	$(CPLUSPLUS_COMPILER) -o ../objs/$@-$(GYP_TARGET_ARCH) $< $(LIBS) $(LINK_OPTS)
 	@$(STRIP) ../objs/$@-$(GYP_TARGET_ARCH)
 
 clean :

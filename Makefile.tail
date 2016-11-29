@@ -20,7 +20,6 @@ distclean: clean
 	-rm -rf $(LIVE555_DIR) \
 	  $(SRS_LIBRTMP_DIR) \
 	  src/Makefile \
-	  node-gyp/Makefile \
 	  Makefile
 	  
 clean:

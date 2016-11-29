@@ -12,8 +12,6 @@
 #include "ourMD5.hh"
 #include "spsDecode.h"
 
-//#define DEBUG
-
 #define CHECK_ALIVE_TASK_TIMER_INTERVAL 5*1000*1000
 
 #define RECONNECT_WAIT_DELAY(n) if (n >= 3) { usleep(CHECK_ALIVE_TASK_TIMER_INTERVAL); n = 0; }
@@ -61,6 +59,7 @@ UsageEnvironment& operator<< (UsageEnvironment& env, const MediaSubsession& subs
 UsageEnvironment* thatEnv;
 char const* progName = NULL;
 struct timeval timeNow;
+Boolean runDebugMode = False;
 
 class StreamClientState {
 public:
@@ -103,14 +102,15 @@ public:
 						break;
 					}
 				}
-#ifdef DEBUG
-				u_int8_t nut = data[4] & 0x1F;
-				envir() << "[URL:\"" << fUrl << "\"]: " << "sent packet: type=video" << ", time=" << pts
+
+				if(runDebugMode) {
+					u_int8_t nut = data[4] & 0x1F;
+					envir() << "[URL:\"" << fUrl << "\"]: " << "sent packet: type=video" << ", time=" << pts
 						<< ", size=" << size << ", b[4]="
 						<< (unsigned char*) data[4] << "("
 						<< (isSPS(nut) ? "SPS" : (isPPS(nut) ? "PPS" : (isIDR(nut) ? "I" : (isNonIDR(nut) ? "P" : "Unknown"))))
 						<< ")\n";
-#endif
+				}
 			}
 			return True;
 		} while (0);
@@ -140,11 +140,12 @@ public:
 				if (ret != 0) {
 					envir() << "[URL:\"" << fUrl << "\"]: " << "send audio raw data failed. code=" << ret << "\n";
 				}
-#ifdef DEBUG
-				envir() << "[URL:\"" << fUrl << "\"]: " <<"sent packet: type=audio" << ", time=" << pts
+
+				if(runDebugMode) {
+					envir() << "[URL:\"" << fUrl << "\"]: " <<"sent packet: type=audio" << ", time=" << pts
 						<< ", size=" << size << ", codec=" << sound_format << ", rate=" << sound_rate
 						<< ", sample=" << sound_size << ", channel=" << sound_type << "\n";
-#endif
+				}
 			}
 			return True;
 		} while (0);
@@ -230,7 +231,7 @@ public:
 	virtual Boolean continuePlaying();
 
 	void parseSpsPacket(u_int8_t* data, unsigned size) {
-		delete[] fSps;
+		delete[] fSps; fSps = NULL;
 		fSpsSize = size+4;
 		fSps = new u_int8_t[fSpsSize];
 		fSps[0] = 0; fSps[1] = 0;
@@ -242,7 +243,7 @@ public:
 		if ((width > VIDEO_MIN_WIDTH && width >= fWidth)
 				|| (height > VIDEO_MIN_HEIGHT && height >= fHeight)) {
 			fBufferSize = (fWidth = width) * (fHeight = height) / 2;
-			delete[] fReceiveBuffer;
+			delete[] fReceiveBuffer; fReceiveBuffer = NULL;
 			fReceiveBuffer = new u_int8_t[fBufferSize];
 		}
 
@@ -252,7 +253,7 @@ public:
 	}
 
 	void parsePpsPacket(u_int8_t* data, unsigned size) {
-		delete[] fPps;
+		delete[] fPps; fPps = NULL;
 		fPpsSize = size + 4;
 		fPps = new u_int8_t[fPpsSize];
 		fPps[0] = 0; fPps[1] = 0;
