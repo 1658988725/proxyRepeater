@@ -1,0 +1,6 @@
+[submodule "srs-librtmp"]
+	path = srs-librtmp
+	url = https://github.com/aesirteam/srs-librtmp.git
+[submodule "live555"]
+	path = live555
+	url = https://github.com/aesirteam/live555.git
