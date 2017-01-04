@@ -53,18 +53,7 @@ if [ ! -d  $PRO_DIR/objs ]; then
     mkdir $PRO_DIR/objs
 fi
 
-if [ ! -d  $PRO_DIR/live555 ]; then
-    wget http://www.live555.com/liveMedia/public/live555-latest.tar.gz
-    tar zxvf live555-latest.tar.gz && mv live live555 && rm -rf live555-latest.tar.gz
-    cp config.rpi ./live555/config.armlinux-gnueabihf
-    cp config.openwrt ./live555/config.mipsel-openwrt-linux
-    cp config.neo ./live555/config.nanopi-neo
-    patch -p0 < patches/live555.patch
-fi
-
-if [ ! -d  $PRO_DIR/srs-librtmp ]; then
-    git clone https://github.com/aesirteam/srs-librtmp.git
-fi
+git submodule update --init --recursive
 
 cd live555/liveMedia
 rm -f Makefile
