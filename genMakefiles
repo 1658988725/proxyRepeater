@@ -53,7 +53,7 @@ if [ ! -d  $PRO_DIR/objs ]; then
     mkdir $PRO_DIR/objs
 fi
 
-git submodule update --init --recursive
+#git submodule update --init --recursive
 
 cd live555/liveMedia
 rm -f Makefile
